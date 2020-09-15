@@ -111,7 +111,7 @@ extern struct config_parser_state* cfg_parser;
 %token VAR_IGNORE_CD_FLAG VAR_LOG_QUERIES VAR_LOG_REPLIES VAR_LOG_LOCAL_ACTIONS
 %token VAR_TCP_UPSTREAM VAR_SSL_UPSTREAM
 %token VAR_SSL_SERVICE_KEY VAR_SSL_SERVICE_PEM VAR_SSL_PORT VAR_FORWARD_FIRST
-%token VAR_STUB_SSL_UPSTREAM VAR_FORWARD_SSL_UPSTREAM VAR_TLS_CERT_BUNDLE
+%token VAR_STUB_SSL_UPSTREAM VAR_STUB_TCP_UPSTREAM VAR_FORWARD_SSL_UPSTREAM VAR_TLS_CERT_BUNDLE
 %token VAR_STUB_FIRST VAR_MINIMAL_RESPONSES VAR_RRSET_ROUNDROBIN
 %token VAR_MAX_UDP_SIZE VAR_DELAY_CLOSE
 %token VAR_UNBLOCK_LAN_ZONES VAR_INSECURE_LAN_ZONES
@@ -302,7 +302,7 @@ stubstart: VAR_STUB_ZONE
 contents_stub: contents_stub content_stub 
 	| ;
 content_stub: stub_name | stub_host | stub_addr | stub_prime | stub_first |
-	stub_no_cache | stub_ssl_upstream
+	stub_no_cache | stub_ssl_upstream | stub_tcp_upstream
 	;
 forwardstart: VAR_FORWARD_ZONE
 	{
@@ -2466,6 +2466,16 @@ stub_ssl_upstream: VAR_STUB_SSL_UPSTREAM STRING_ARG
 		if(strcmp($2, "yes") != 0 && strcmp($2, "no") != 0)
 			yyerror("expected yes or no.");
 		else cfg_parser->cfg->stubs->ssl_upstream = 
+			(strcmp($2, "yes")==0);
+		free($2);
+	}
+	;
+stub_tcp_upstream: VAR_STUB_TCP_UPSTREAM STRING_ARG
+	{
+		OUTYY(("P(stub-tcp-upstream:%s)\n", $2));
+		if(strcmp($2, "yes") != 0 && strcmp($2, "no") != 0)
+			yyerror("expected yes or no.");
+		else cfg_parser->cfg->stubs->tcp_upstream = 
 			(strcmp($2, "yes")==0);
 		free($2);
 	}

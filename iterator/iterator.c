@@ -2608,6 +2608,7 @@ processQueryTargets(struct module_qstate* qstate, struct iter_qstate* iq,
 		iq->dnssec_expected, iq->caps_fallback || is_caps_whitelisted(
 		ie, iq), &target->addr, target->addrlen,
 		iq->dp->name, iq->dp->namelen,
+		(iq->dp->tcp_upstream || qstate->env->cfg->tcp_upstream),
 		(iq->dp->ssl_upstream || qstate->env->cfg->ssl_upstream),
 		target->tls_auth_name, qstate);
 	if(!outq) {

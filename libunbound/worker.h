@@ -72,7 +72,7 @@ struct query_info;
 struct outbound_entry* libworker_send_query(struct query_info* qinfo,
 	uint16_t flags, int dnssec, int want_dnssec, int nocaps,
 	struct sockaddr_storage* addr, socklen_t addrlen, uint8_t* zone,
-	size_t zonelen, int ssl_upstream, char* tls_auth_name,
+	size_t zonelen, int tcp_upstream, int ssl_upstream, char* tls_auth_name,
 	struct module_qstate* q);
 
 /** process incoming replies from the network */
@@ -127,7 +127,7 @@ void worker_sighandler(int sig, void* arg);
 struct outbound_entry* worker_send_query(struct query_info* qinfo,
 	uint16_t flags, int dnssec, int want_dnssec, int nocaps,
 	struct sockaddr_storage* addr, socklen_t addrlen, uint8_t* zone,
-	size_t zonelen, int ssl_upstream, char* tls_auth_name,
+	size_t zonelen, int tcp_upstream, int ssl_upstream, char* tls_auth_name,
 	struct module_qstate* q);
 
 /** 

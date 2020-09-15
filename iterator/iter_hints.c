@@ -287,6 +287,8 @@ read_stubs(struct iter_hints* hints, struct config_file* cfg)
 		dp->no_cache = s->no_cache;
 		/* ssl_upstream */
 		dp->ssl_upstream = (uint8_t)s->ssl_upstream;
+		/* tcp_upstream */
+		dp->tcp_upstream = (uint8_t)s->tcp_upstream;
 		delegpt_log(VERB_QUERY, dp);
 		if(!hints_insert(hints, LDNS_RR_CLASS_IN, dp, !s->isprime))
 			return 0;
