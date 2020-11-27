@@ -38,6 +38,7 @@ d	TXT	"local data 2nd zone"
 e	CNAME	*.a.example.
 *.e	CNAME	*.b.example.
 drop	CNAME	rpz-drop.
+tcp	CNAME	rpz-tcp-only.
 TEMPFILE_END
 
 stub-zone:
@@ -295,10 +296,45 @@ something.e.b.example.	IN	TXT	"*.b.example. answer from upstream ns"
 ENTRY_END
 
 ; deny zone
-STEP 90 QUERY
+;STEP 90 QUERY
+;ENTRY_BEGIN
+;SECTION QUESTION
+;drop. IN TXT
+;ENTRY_END
+
+; tcp-only action
+
+STEP 95 QUERY
 ENTRY_BEGIN
 SECTION QUESTION
-drop. IN TXT
+tcp. IN TXT
 ENTRY_END
+
+STEP 96 CHECK_ANSWER
+ENTRY_BEGIN
+MATCH all
+REPLY QR RA AA TC NOERROR
+SECTION QUESTION
+tcp. IN TXT
+SECTION ANSWER
+ENTRY_END
+
+STEP 97 QUERY
+ENTRY_BEGIN
+MATCH TCP
+SECTION QUESTION
+tcp.  IN TXT
+ENTRY_END
+
+STEP 98 CHECK_ANSWER
+ENTRY_BEGIN
+MATCH all TCP
+REPLY QR RD RA AA NOERROR
+SECTION QUESTION
+tcp.  IN TXT
+SECTION ANSWER
+tcp.  IN  TXT "local tcp data 2nd zone"
+ENTRY_END
+
 ; no answer is checked at exit of testbound.
 SCENARIO_END

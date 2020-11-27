@@ -2471,6 +2471,17 @@ processQueryTargets(struct module_qstate* qstate, struct iter_qstate* iq,
 	/* Add the current set of unused targets to our queue. */
 	delegpt_add_unused_targets(iq->dp);
 
+	{ /* apply rpz triggers at query time */
+		struct dns_msg* forged_response = rpz_callback_from_iterator_module(qstate, iq);
+		if(forged_response != NULL) {
+			qstate->ext_state[id] = module_finished;
+			qstate->return_rcode = FLAGS_GET_RCODE(forged_response->rep->flags);
+			qstate->return_msg = forged_response;
+			next_state(iq, FINISHED_STATE);
+			return 0;
+		}
+	}
+
 	/* Select the next usable target, filtering out unsuitable targets. */
 	target = iter_server_selection(ie, qstate->env, iq->dp, 
 		iq->dp->name, iq->dp->namelen, iq->qchase.qtype,
@@ -2660,6 +2671,7 @@ processQueryResponse(struct module_qstate* qstate, struct iter_qstate* iq,
 {
 	int dnsseclame = 0;
 	enum response_type type;
+
 	iq->num_current_queries--;
 
 	if(!inplace_cb_query_response_call(qstate->env, qstate, iq->response))

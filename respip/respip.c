@@ -483,8 +483,8 @@ respip_views_apply_cfg(struct views* vs, struct config_file* cfg,
  * This function returns the copied rrset key on success, and NULL on memory
  * allocation failure.
  */
-static struct ub_packed_rrset_key*
-copy_rrset(const struct ub_packed_rrset_key* key, struct regional* region)
+struct ub_packed_rrset_key*
+respip_copy_rrset(const struct ub_packed_rrset_key* key, struct regional* region)
 {
 	struct ub_packed_rrset_key* ck = regional_alloc(region,
 		sizeof(struct ub_packed_rrset_key));
@@ -635,43 +635,6 @@ respip_addr_lookup(const struct reply_info *rep, struct respip_set* rs,
 	return NULL;
 }
 
-/*
- * Create a new reply_info based on 'rep'.  The new info is based on
- * the passed 'rep', but ignores any rrsets except for the first 'an_numrrsets'
- * RRsets in the answer section.  These answer rrsets are copied to the
- * new info, up to 'copy_rrsets' rrsets (which must not be larger than
- * 'an_numrrsets').  If an_numrrsets > copy_rrsets, the remaining rrsets array
- * entries will be kept empty so the caller can fill them later.  When rrsets
- * are copied, they are shallow copied.  The caller must ensure that the
- * copied rrsets are valid throughout its lifetime and must provide appropriate
- * mutex if it can be shared by multiple threads.
- */
-static struct reply_info *
-make_new_reply_info(const struct reply_info* rep, struct regional* region,
-	size_t an_numrrsets, size_t copy_rrsets)
-{
-	struct reply_info* new_rep;
-	size_t i;
-
-	/* create a base struct.  we specify 'insecure' security status as
-	 * the modified response won't be DNSSEC-valid.  In our faked response
-	 * the authority and additional sections will be empty (except possible
-	 * EDNS0 OPT RR in the additional section appended on sending it out),
-	 * so the total number of RRsets is an_numrrsets. */
-	new_rep = construct_reply_info_base(region, rep->flags,
-		rep->qdcount, rep->ttl, rep->prefetch_ttl,
-		rep->serve_expired_ttl, an_numrrsets, 0, 0, an_numrrsets,
-		sec_status_insecure);
-	if(!new_rep)
-		return NULL;
-	if(!reply_info_alloc_rrset_keys(new_rep, NULL, region))
-		return NULL;
-	for(i=0; i<copy_rrsets; i++)
-		new_rep->rrsets[i] = rep->rrsets[i];
-
-	return new_rep;
-}
-
 /**
  * See if response-ip or tag data should override the original answer rrset
  * (which is rep->rrsets[rrset_id]) and if so override it.
@@ -730,7 +693,7 @@ respip_data_answer(enum respip_action action,
 				"response-ip redirect with tag data [%d] %s",
 				tag, (tag<num_tags?tagname[tag]:"null"));
 			/* use copy_rrset() to 'normalize' memory layout */
-			rp = copy_rrset(&r, region);
+			rp = respip_copy_rrset(&r, region);
 			if(!rp)
 				return -1;
 		}
@@ -743,7 +706,7 @@ respip_data_answer(enum respip_action action,
 	 * rename the dname for other actions than redirect.  This is because
 	 * response-ip-data isn't associated to any specific name. */
 	if(rp == data) {
-		rp = copy_rrset(rp, region);
+		rp = respip_copy_rrset(rp, region);
 		if(!rp)
 			return -1;
 		rp->rk.dname = rep->rrsets[rrset_id]->rk.dname;
@@ -807,7 +770,6 @@ respip_nodata_answer(uint16_t qtype, enum respip_action action,
 		 * is explicitly specified. */
 		int rcode = (action == respip_always_nxdomain)?
 			LDNS_RCODE_NXDOMAIN:LDNS_RCODE_NOERROR;
-
 		/* We should empty the answer section except for any preceding
 		 * CNAMEs (in that case rrset_id > 0).  Type-ANY case is
 		 * special as noted in respip_data_answer(). */
@@ -1209,7 +1171,7 @@ respip_merge_cname(struct reply_info* base_rep,
 	if(!new_rep)
 		return 0;
 	for(i=0,j=base_rep->an_numrrsets; i<tgt_rep->an_numrrsets; i++,j++) {
-		new_rep->rrsets[j] = copy_rrset(tgt_rep->rrsets[i], region);
+		new_rep->rrsets[j] = respip_copy_rrset(tgt_rep->rrsets[i], region);
 		if(!new_rep->rrsets[j])
 			return 0;
 	}

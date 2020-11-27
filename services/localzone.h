@@ -98,6 +98,8 @@ enum localzone_type {
 	local_zone_always_deny,
 	/** answer not from the view, but global or no-answer */
 	local_zone_noview,
+	/** truncate the response; client should retry via tcp */
+	local_zone_truncate,
 	/** Invalid type, cannot be used to generate answer */
 	local_zone_invalid
 };
@@ -556,6 +558,8 @@ enum respip_action {
 	respip_always_nodata = local_zone_always_nodata,
         /** answer with nodata response */
 	respip_always_deny = local_zone_always_deny,
+	/** RPZ: truncate answer in order to force switch to tcp */
+	respip_truncate = local_zone_truncate,
 
 	/* The rest of the values are only possible as
 	 * access-control-tag-action */
