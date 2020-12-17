@@ -1146,6 +1146,13 @@ int cfg_mark_ports(const char* str, int allow, int* avail, int num);
 int cfg_condense_ports(struct config_file* cfg, int** avail);
 
 /**
+ * Apply system specific port range policy.
+ * @param cfg: config file.
+ * @param num: size of the array (65536).
+ */
+void cfg_apply_local_port_policy(struct config_file* cfg, int num);
+
+/**
  * Scan ports available
  * @param avail: the array from cfg.
  * @param num: size of the array (65536).
@@ -1273,6 +1280,10 @@ void w_config_adjust_directory(struct config_file* cfg);
 
 /** debug option for unit tests. */
 extern int fake_dsa, fake_sha1;
+
+#ifdef USE_LINUX_IP_LOCAL_PORT_RANGE
+#define LINUX_IP_LOCAL_PORT_RANGE_PATH "/proc/sys/net/ipv4/ip_local_port_range"
+#endif
 
 #endif /* UTIL_CONFIG_FILE_H */
 

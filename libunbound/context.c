@@ -69,6 +69,7 @@ context_finalize(struct ub_ctx* ctx)
 	} else {
 		log_init(cfg->logfile, cfg->use_syslog, NULL);
 	}
+	cfg_apply_local_port_policy(cfg, 65536);
 	config_apply(cfg);
 	if(!modstack_setup(&ctx->mods, cfg->module_conf, ctx->env))
 		return UB_INITFAIL;
