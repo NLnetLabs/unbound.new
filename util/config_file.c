@@ -1645,6 +1645,37 @@ int cfg_condense_ports(struct config_file* cfg, int** avail)
 	return num;
 }
 
+void cfg_apply_local_port_policy(struct config_file* cfg, int num) {
+(void)cfg;
+(void)num;
+#ifdef USE_LINUX_IP_LOCAL_PORT_RANGE
+	{
+		int i = 0;
+		FILE* range_fd;
+		if ((range_fd = fopen(LINUX_IP_LOCAL_PORT_RANGE_PATH, "r")) != NULL) {
+			int min_port = 0;
+			int max_port = num - 1;
+			if (fscanf(range_fd, "%d %d", &min_port, &max_port) == 2) {
+				for(i=0; i<min_port; i++) {
+					cfg->outgoing_avail_ports[i] = 0;
+				}
+				for(i=max_port+1; i<num; i++) {
+					cfg->outgoing_avail_ports[i] = 0;
+				}
+			} else {
+				log_err("unexpected port range in %s",
+						LINUX_IP_LOCAL_PORT_RANGE_PATH);
+			}
+			fclose(range_fd);
+		} else {
+			log_warn("failed to read from file: %s (%s)",
+					LINUX_IP_LOCAL_PORT_RANGE_PATH,
+					strerror(errno));
+		}
+	}
+#endif
+}
+
 /** print error with file and line number */
 static void ub_c_error_va_list(const char *fmt, va_list args)
 {
