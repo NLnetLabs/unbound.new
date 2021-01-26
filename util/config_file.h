@@ -646,6 +646,13 @@ struct config_file {
 	int redis_expire_records;
 #endif
 #endif
+	/** Downstream DNS Cookies */
+	/** do answer with server cookie when request contained cookie option */
+	int do_answer_cookie;
+	/** cookie secret */
+	uint8_t cookie_secret[40];
+	/** cookie secret length */
+	size_t  cookie_secret_len;
 
 	/* ipset module */
 #ifdef USE_IPSET

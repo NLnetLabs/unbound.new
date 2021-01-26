@@ -550,7 +550,7 @@ answer_norec_from_cache(struct worker* worker, struct query_info* qinfo,
 			return 0;
 	msg->rep->flags |= BIT_QR|BIT_RA;
 	if(!apply_edns_options(edns, &edns_bak, worker->env.cfg,
-		repinfo->c, worker->scratchpad) ||
+		repinfo->c, repinfo, *worker->env.now, worker->scratchpad) ||
 		!reply_info_answer_encode(&msg->qinfo, msg->rep, id, flags, 
 		repinfo->c->buffer, 0, 1, worker->scratchpad,
 		udpsize, edns, (int)(edns->bits & EDNS_DO), secure)) {
@@ -754,7 +754,7 @@ answer_from_cache(struct worker* worker, struct query_info* qinfo,
 				goto bail_out;
 		}
 	} else if(!apply_edns_options(edns, &edns_bak, worker->env.cfg,
-		repinfo->c, worker->scratchpad) ||
+		repinfo->c, repinfo, *worker->env.now, worker->scratchpad) ||
 		!reply_info_answer_encode(qinfo, encode_rep, id, flags,
 		repinfo->c->buffer, timenow, 1, worker->scratchpad,
 		udpsize, edns, (int)(edns->bits & EDNS_DO), *is_secure_answer)) {
@@ -1114,6 +1114,7 @@ worker_handle_request(struct comm_point* c, void* arg, int error,
 	struct query_info* lookup_qinfo = &qinfo;
 	struct query_info qinfo_tmp; /* placeholder for lookup_qinfo */
 	struct respip_client_info* cinfo = NULL, cinfo_tmp;
+	int valid_cookie = 0;
 	memset(&qinfo, 0, sizeof(qinfo));
 
 	if((error != NETEVENT_NOERROR && error != NETEVENT_DONE)|| !repinfo) {
@@ -1281,7 +1282,25 @@ worker_handle_request(struct comm_point* c, void* arg, int error,
 		regional_free_all(worker->scratchpad);
 		goto send_reply;
 	}
-	if(edns.edns_present) {
+	if(!edns.edns_present) {
+		if(c->type == comm_udp && acl == acl_allow_cookie) {
+			verbose(VERB_ALGO, "worker request: "
+				"need cookie or stateful transport");
+			log_addr(VERB_ALGO, "from",
+				&repinfo->addr, repinfo->addrlen);
+			LDNS_QR_SET(sldns_buffer_begin(c->buffer));
+			LDNS_TC_SET(sldns_buffer_begin(c->buffer));
+			LDNS_RCODE_SET(sldns_buffer_begin(c->buffer), 
+				LDNS_RCODE_REFUSED);
+			sldns_buffer_set_position(c->buffer,
+					LDNS_HEADER_SIZE);
+			sldns_buffer_write_at(c->buffer, 4, 
+				(uint8_t*)"\0\0\0\0\0\0\0\0", 8);
+			sldns_buffer_flip(c->buffer);
+			regional_free_all(worker->scratchpad);
+			goto send_reply;
+		}
+	} else {
 		struct edns_option* edns_opt;
 		if(edns.edns_version != 0) {
 			edns.ext_rcode = (uint8_t)(EDNS_RCODE_BADVERS>>4);
@@ -1308,7 +1327,96 @@ worker_handle_request(struct comm_point* c, void* arg, int error,
 			log_addr(VERB_CLIENT,"from",&repinfo->addr, repinfo->addrlen);
 			edns.udp_size = NORMAL_UDP_SIZE;
 		}
-		if(c->type != comm_udp) {
+		if(c->type == comm_udp) {
+			/* Cookies only on UDP */
+
+			if(!worker->daemon->cfg->do_answer_cookie)
+				; /* pass; No cookie processing whatsoever */
+
+			else if(!(edns_opt = edns_opt_list_find(
+					edns.opt_list, LDNS_EDNS_COOKIE))) {
+				; /* pass; No cookie option present */
+
+			} else if(edns_opt->opt_len != 8 &&
+					(  edns_opt->opt_len < 16
+					|| edns_opt->opt_len > 40)) {
+				edns.ext_rcode = 0;
+				edns.edns_version = EDNS_ADVERTISED_VERSION;
+				edns.udp_size = EDNS_ADVERTISED_SIZE;
+				edns.bits &= EDNS_DO;
+				edns.opt_list = NULL;
+				verbose(VERB_ALGO, "worker request: "
+						"badly formatted cookie");
+				log_addr(VERB_CLIENT, "from",
+					&repinfo->addr, repinfo->addrlen);
+				error_encode(c->buffer, LDNS_RCODE_FORMERR,
+					&qinfo, *(uint16_t*)(void *)
+					sldns_buffer_begin(c->buffer),
+					sldns_buffer_read_u16_at(c->buffer, 2),
+					NULL);
+				if(sldns_buffer_capacity(c->buffer) >=
+				   sldns_buffer_limit(c->buffer)
+				   + calc_edns_field_size(&edns))
+					attach_edns_record(c->buffer, &edns);
+				regional_free_all(worker->scratchpad);
+				goto send_reply;
+
+			} else if (edns_cookie_validate(worker->env.cfg,
+					repinfo, edns_opt, *worker->env.now)) {
+				valid_cookie = 1;
+
+			} else if (acl == acl_allow_cookie) {
+				struct edns_data edns_bak = edns;
+				int rcode;
+
+				/* With invalid or just client Cookie
+				 * reply with BADCOOKIE + server cookie
+				 */
+				edns.ext_rcode = 0;
+				edns.edns_version = EDNS_ADVERTISED_VERSION;
+				edns.udp_size = EDNS_ADVERTISED_SIZE;
+				edns.bits &= EDNS_DO;
+				edns.opt_list = NULL;
+				if (apply_edns_options(&edns, &edns_bak,
+							worker->env.cfg, c,
+							repinfo,
+							*worker->env.now,
+							worker->scratchpad)) {
+					edns.ext_rcode = 1;
+					rcode = LDNS_EXT_RCODE_BADCOOKIE & 0xF;
+				} else
+					rcode = LDNS_RCODE_SERVFAIL;
+				error_encode(c->buffer, rcode, &qinfo,
+					*(uint16_t*)(void *)
+					sldns_buffer_begin(c->buffer),
+					sldns_buffer_read_u16_at(c->buffer, 2),
+					NULL);
+				if(sldns_buffer_capacity(c->buffer) >=
+				   sldns_buffer_limit(c->buffer)
+				   + calc_edns_field_size(&edns))
+					attach_edns_record(c->buffer, &edns);
+				regional_free_all(worker->scratchpad);
+				goto send_reply;
+			}
+			if (acl == acl_allow_cookie && !valid_cookie) {
+				verbose(VERB_ALGO, "worker request: "
+					"need cookie or stateful transport");
+				log_addr(VERB_ALGO, "from",
+					&repinfo->addr, repinfo->addrlen);
+				LDNS_QR_SET(sldns_buffer_begin(c->buffer));
+				LDNS_TC_SET(sldns_buffer_begin(c->buffer));
+				LDNS_RCODE_SET(sldns_buffer_begin(c->buffer), 
+					LDNS_RCODE_REFUSED);
+				sldns_buffer_set_position(c->buffer,
+						LDNS_HEADER_SIZE);
+				sldns_buffer_write_at(c->buffer, 4, 
+					(uint8_t*)"\0\0\0\0\0\0\0\0", 8);
+				sldns_buffer_flip(c->buffer);
+				regional_free_all(worker->scratchpad);
+				goto send_reply;
+			}
+
+		} else  { /* if(c->type == comm_udp) */
 			edns_opt = edns_opt_list_find(edns.opt_list, LDNS_EDNS_KEEPALIVE);
 			if(edns_opt && edns_opt->opt_len > 0) {
 				edns.ext_rcode = 0;

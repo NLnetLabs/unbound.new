@@ -425,6 +425,7 @@ enum sldns_enum_edns_option
 	LDNS_EDNS_DHU = 6, /* RFC6975 */
 	LDNS_EDNS_N3U = 7, /* RFC6975 */
 	LDNS_EDNS_CLIENT_SUBNET = 8, /* RFC7871 */
+	LDNS_EDNS_COOKIE = 10, /* RFC7873 */
 	LDNS_EDNS_KEEPALIVE = 11, /* draft-ietf-dnsop-edns-tcp-keepalive*/
 	LDNS_EDNS_PADDING = 12, /* RFC7830 */
 	LDNS_EDNS_CLIENT_TAG = 16 /* draft-bellis-dnsop-edns-tags-01 */
@@ -441,6 +442,9 @@ typedef enum sldns_enum_edns_option sldns_edns_option;
 #define LDNS_TSIG_ERROR_BADMODE  19
 #define LDNS_TSIG_ERROR_BADNAME  20
 #define LDNS_TSIG_ERROR_BADALG   21
+
+/** DNS Cookie extended rcode */
+#define LDNS_EXT_RCODE_BADCOOKIE 23
 
 /**
  * Contains all information about resource record types.

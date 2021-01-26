@@ -47,6 +47,12 @@
 #include "util/regional.h"
 #include "util/data/msgparse.h"
 #include "util/data/msgreply.h"
+#include "sldns/sbuffer.h"
+
+#ifdef HAVE_SSL
+#include <openssl/opensslv.h>
+#include <openssl/evp.h>
+#endif
 
 struct edns_strings* edns_strings_create(void)
 {
@@ -153,11 +159,154 @@ static int edns_keepalive(struct edns_data* edns_out, struct edns_data* edns_in,
 	return 1;
 }
 
+int siphash(const uint8_t *in, const size_t inlen,
+		const uint8_t *k, uint8_t *out, const size_t outlen);
+
+/** RFC 1982 comparison, uses unsigned integers, and tries to avoid
+ * compiler optimization (eg. by avoiding a-b<0 comparisons),
+ * this routine matches compare_serial(), for SOA serial number checks */
+static int
+compare_1982(uint32_t a, uint32_t b)
+{
+	/* for 32 bit values */
+	const uint32_t cutoff = ((uint32_t) 1 << (32 - 1));
+
+	if (a == b) {
+		return 0;
+	} else if ((a < b && b - a < cutoff) || (a > b && a - b > cutoff)) {
+		return -1;
+	} else {
+		return 1;
+	}
+}
+
+/** if we know that b is larger than a, return the difference between them,
+ * that is the distance between them. in RFC1982 arith */
+static uint32_t
+subtract_1982(uint32_t a, uint32_t b)
+{
+	/* for 32 bit values */
+	const uint32_t cutoff = ((uint32_t) 1 << (32 - 1));
+
+	if(a == b)
+		return 0;
+	if(a < b && b - a < cutoff) {
+		return b-a;
+	}
+	if(a > b && a - b > cutoff) {
+		return ((uint32_t)0xffffffff) - (a-b-1);
+	}
+	/* wrong case, b smaller than a */
+	return 0;
+}
+
+
+int edns_cookie_validate(struct config_file* cfg, struct comm_reply* repinfo,
+		struct edns_option* cookie_opt, time_t now)
+{
+	uint8_t hash[8], data2hash[40];
+	uint32_t cookie_time, now_uint32 = now;
+
+	/* We support only draft-sury-toorop-dns-cookies-algorithms
+	 * sized cookies
+	 */
+	if(cookie_opt->opt_len != 24)
+		return 0;
+
+	if(cookie_opt->opt_data[8] != 1)
+		return 0;
+
+	cookie_time = sldns_read_uint32(cookie_opt->opt_data + 12);
+
+	if(compare_1982(now_uint32, cookie_time) > 0) {
+		if (subtract_1982(cookie_time, now_uint32) > 3600)
+			return 0; /* Not older than 1 hour */
+
+	} else if (subtract_1982(now_uint32, cookie_time) > 300)
+		/* ignore cookies > 5 minutes in future */
+		return 0;
+
+	if (cfg->cookie_secret_len != 16)
+		return 0;
+
+	memcpy(data2hash, cookie_opt->opt_data, 16);
+	if (repinfo->addr.ss_family == AF_INET6) {
+		memcpy( data2hash + 16, &((struct sockaddr_in6 *)
+		                        &repinfo->addr)->sin6_addr, 16);
+		siphash(data2hash, 32, cfg->cookie_secret, hash, 8);
+	} else {
+		memcpy( data2hash + 16, &((struct sockaddr_in *)
+		                        &repinfo->addr)->sin_addr, 4);
+		siphash(data2hash, 20, cfg->cookie_secret, hash, 8);
+	}
+	return memcmp(cookie_opt->opt_data + 16, hash, 8) == 0;
+}
+
+static int edns_cookie(struct edns_data* edns_out, struct edns_data* edns_in,
+	struct config_file* cfg, struct comm_point* c,
+	struct comm_reply *repinfo, time_t now,
+	struct regional* region)
+{
+	struct edns_option *opt;
+
+	if(c->type != comm_udp)
+		return 1;
+
+	if(!cfg->do_answer_cookie)
+		return 1;
+
+	opt = edns_opt_list_find(edns_in->opt_list, LDNS_EDNS_COOKIE);
+	if (opt && opt->opt_len >= 8) {
+		uint8_t data_out[40], hash[8];
+
+		log_assert(cfg->cookie_secret_len >= 16);
+
+		(void)memcpy(data_out, opt->opt_data, 8);
+		data_out[ 8] = 1;   /* Version */
+		data_out[ 9] = 0;   /* Reserved */
+		data_out[10] = 0;   /* Reserved */
+		data_out[11] = 0;   /* Reserved */
+		sldns_write_uint32(data_out + 12, time(NULL));
+		if (repinfo->addr.ss_family == AF_INET6) {
+			memcpy( data_out + 16, &((struct sockaddr_in6 *)
+			                       &repinfo->addr)->sin6_addr, 16);
+			siphash(data_out, 32, cfg->cookie_secret, hash, 8);
+		} else {
+			memcpy( data_out + 16, &((struct sockaddr_in *)
+			                       &repinfo->addr)->sin_addr, 4);
+			siphash(data_out, 20, cfg->cookie_secret, hash, 8);
+		}
+		memcpy(data_out + 16, hash, 8);
+		if(!edns_opt_list_append(&edns_out->opt_list, LDNS_EDNS_COOKIE,
+				24, data_out, region))
+			return 0;
+	}
+	return 1;
+}
+
+static int edns_padding(struct edns_data* edns_out, struct edns_data* edns_in,
+		struct comm_point* c, struct regional* region)
+{
+	if(c->type == comm_udp)
+		return 1;
+
+	if(edns_opt_list_find(edns_in->opt_list, LDNS_EDNS_PADDING)) {
+		if(!edns_opt_list_append(&edns_out->opt_list,
+					LDNS_EDNS_PADDING, 0, NULL, region))
+			return 0;
+	}
+	return 1;
+}
+
 int apply_edns_options(struct edns_data* edns_out, struct edns_data* edns_in,
-	struct config_file* cfg, struct comm_point* c, struct regional* region)
+	struct config_file* cfg, struct comm_point* c,
+	struct comm_reply *repinfo, time_t now, struct regional* region)
 {
 	if(cfg->do_tcp_keepalive &&
 		!edns_keepalive(edns_out, edns_in, c, region))
+		return 0;
+
+	if(!edns_cookie(edns_out, edns_in, cfg, c, repinfo, now, region))
 		return 0;
 
 	if (cfg->nsid && edns_opt_list_find(edns_in->opt_list, LDNS_EDNS_NSID)

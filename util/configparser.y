@@ -42,11 +42,13 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+#include <time.h>
 #include <assert.h>
 
 #include "util/configyyrename.h"
 #include "util/config_file.h"
 #include "util/net_help.h"
+#include "sldns/str2wire.h"
 
 int ub_c_lex(void);
 void ub_c_error(const char *message);
@@ -174,6 +176,7 @@ extern struct config_parser_state* cfg_parser;
 %token VAR_FALLBACK_ENABLED VAR_TLS_ADDITIONAL_PORT VAR_LOW_RTT VAR_LOW_RTT_PERMIL
 %token VAR_FAST_SERVER_PERMIL VAR_FAST_SERVER_NUM
 %token VAR_ALLOW_NOTIFY VAR_TLS_WIN_CERT VAR_TCP_CONNECTION_LIMIT
+%token VAR_ANSWER_COOKIE VAR_COOKIE_SECRET
 %token VAR_FORWARD_NO_CACHE VAR_STUB_NO_CACHE VAR_LOG_SERVFAIL VAR_DENY_ANY
 %token VAR_UNKNOWN_SERVER_TIME_LIMIT VAR_LOG_TAG_QUERYREPLY
 %token VAR_STREAM_WAIT_SIZE VAR_TLS_CIPHERS VAR_TLS_CIPHERSUITES VAR_TLS_USE_SNI
@@ -298,6 +301,7 @@ content_server: server_num_threads | server_verbosity | server_port |
 	server_unknown_server_time_limit | server_log_tag_queryreply |
 	server_stream_wait_size | server_tls_ciphers |
 	server_tls_ciphersuites | server_tls_session_ticket_keys |
+	server_answer_cookie | server_cookie_secret |
 	server_tls_use_sni | server_edns_client_string |
 	server_edns_client_string_opcode | server_nsid
 	;
@@ -1751,10 +1755,12 @@ server_access_control: VAR_ACCESS_CONTROL STRING_ARG STRING_ARG
 			strcmp($3, "refuse_non_local")!=0 &&
 			strcmp($3, "allow_setrd")!=0 && 
 			strcmp($3, "allow")!=0 && 
-			strcmp($3, "allow_snoop")!=0) {
+			strcmp($3, "allow_snoop")!=0 &&
+			strcmp($3, "allow_cookie")!=0) {
 			yyerror("expected deny, refuse, deny_non_local, "
-				"refuse_non_local, allow, allow_setrd or "
-				"allow_snoop in access control action");
+				"refuse_non_local, allow, allow_setrd, "
+				"allow_snoop or allow_cookie in access control "
+				"action");
 			free($2);
 			free($3);
 		} else {
@@ -3396,6 +3402,30 @@ server_tcp_connection_limit: VAR_TCP_CONNECTION_LIMIT STRING_ARG STRING_ARG
 		}
 	}
 	;
+server_answer_cookie: VAR_ANSWER_COOKIE STRING_ARG
+	{
+		OUTYY(("P(server_answer_cookie:%s)\n", $2));
+		if(strcmp($2, "yes") != 0 && strcmp($2, "no") != 0)
+			yyerror("expected yes or no.");
+		else cfg_parser->cfg->do_answer_cookie = (strcmp($2, "yes")==0);
+		free($2);
+	}
+	;
+server_cookie_secret: VAR_COOKIE_SECRET STRING_ARG
+	{
+		uint8_t secret[32];
+		size_t secret_len = sizeof(secret);
+
+		OUTYY(("P(server_cookie_secret:%s)\n", $2));
+		if (sldns_str2wire_hex_buf($2, secret, &secret_len)
+		|| (  secret_len != 16))
+			yyerror("expected 128 bit hex string");
+		else {
+			cfg_parser->cfg->cookie_secret_len = secret_len;
+			memcpy(cfg_parser->cfg->cookie_secret, secret, sizeof(secret));
+		}
+		free($2);
+	}
 	ipsetstart: VAR_IPSET
 		{
 			OUTYY(("\nP(ipset:)\n"));

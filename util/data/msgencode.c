@@ -979,12 +979,12 @@ error_encode(sldns_buffer* buf, int r, struct query_info* qinfo,
 	sldns_buffer_flip(buf);
 	if(edns) {
 		struct edns_data es = *edns;
+		size_t edns_field_size = calc_edns_field_size(&es);
 		es.edns_version = EDNS_ADVERTISED_VERSION;
 		es.udp_size = EDNS_ADVERTISED_SIZE;
 		es.ext_rcode = 0;
 		es.bits &= EDNS_DO;
-		if(sldns_buffer_limit(buf) + calc_edns_field_size(&es) >
-			edns->udp_size)
+		if(sldns_buffer_limit(buf) + edns_field_size > edns->udp_size)
 			return;
 		attach_edns_record(buf, &es);
 	}

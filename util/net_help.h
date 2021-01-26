@@ -88,6 +88,10 @@ extern uint16_t EDNS_ADVERTISED_SIZE;
 #define INET_SIZE 4
 /** byte size of ip6 address */
 #define INET6_SIZE 16
+/** block size with which to pad encrypted queries */
+extern uint16_t EDNS_PADDING_QUERY_BLOCK_SIZE;
+/** block size with which to pad encrypted responses */
+extern uint16_t EDNS_PADDING_RESPONSE_BLOCK_SIZE;
 
 /** DNSKEY zone sign key flag */
 #define DNSKEY_BIT_ZSK 0x0100

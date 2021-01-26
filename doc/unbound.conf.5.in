@@ -638,8 +638,8 @@ This option is experimental at this time.
 .B access\-control: \fI<IP netblock> <action>
 The netblock is given as an IP4 or IP6 address with /size appended for a
 classless network block. The action can be \fIdeny\fR, \fIrefuse\fR,
-\fIallow\fR, \fIallow_setrd\fR, \fIallow_snoop\fR, \fIdeny_non_local\fR or
-\fIrefuse_non_local\fR.
+\fIallow\fR, \fIallow_setrd\fR, \fIallow_snoop\fR, \fIallow_cookie\fR,
+\fIdeny_non_local\fR or \fIrefuse_non_local\fR.
 The most specific netblock match is used, if none match \fIdeny\fR is used.
 The order of the access\-control statements therefore does not matter.
 .IP
@@ -674,6 +674,14 @@ to cache snooping, a technique to use nonrecursive queries to examine
 the cache contents (for malicious acts).  However, nonrecursive queries can
 also be a valuable debugging tool (when you want to examine the cache
 contents). In that case use \fIallow_snoop\fR for your administration host.
+.IP
+When the \fBanswer\-cookie\fR option is enabled, the \fIallow_cookie\fR action
+will allow access to UDP queries that contain a valid Server Cookie as
+specified in RFC 7873.  UDP queries containing only a Client Cookie and no
+Server Cookie, will receive a BADCOOKIE response including a Server Cookie,
+allow clients to retry with that Server Cookie. The \fIallow_cookie\fR will
+also accept requests over statefull transports, regardless of the precence of a
+Cookie and regardless the \fBanswer\-cookie\fR setting.
 .IP
 By default only localhost is \fIallow\fRed, the rest is \fIrefuse\fRd.
 The default is \fIrefuse\fRd, because that is protocol\-friendly. The DNS
@@ -1597,6 +1605,15 @@ Set the number of servers that should be used for fast server selection. Only
 use the fastest specified number of servers with the fast\-server\-permil
 option, that turns this on or off. The default is to use the fastest 3 servers.
 .TP 5
+.B answer\-cookie: \fI<yes or no>
+Enable to answer to requests containig DNS Cookies as specified in RFC7873.
+Default is yes.
+.TP 5
+.B cookie\-secret: \fI<128, 192 or 256 bit hex string>
+Server's in an Anycast deployment need to be able to verify each other's
+Server Cookies. For this they need to share the secret used to construct
+and verify the Server Cookies.
+Default is a 128 bits random secret generated at startup time.
 .B edns\-client\-string: \fI<IP netblock> <string>
 Include an EDNS0 option containing configured ascii string in queries with
 destination address matching the configured IP netblock.  This configuration
@@ -1790,16 +1807,16 @@ Default is no.  If enabled, data inside the forward is not cached.  This is
 useful when you want immediate changes to be visible.
 .SS "Authority Zone Options"
 .LP
-Authority zones are configured with \fBauth\-zone:\fR, and each one must
-have a \fBname:\fR.  There can be multiple ones, by listing multiple auth\-zone clauses, each with a different name, pertaining to that part of the namespace.
+Authority zones are configured with \fBauth\-zone:\fR, and each one must have a
+\fBname:\fR.  There can be multiple ones, by listing multiple auth\-zone
+clauses, each with a different name, pertaining to that part of the namespace.
 The authority zone with the name closest to the name looked up is used.
-Authority zones are processed after \fBlocal\-zones\fR and before
-cache (\fBfor\-downstream:\fR \fIyes\fR), and when used in this manner
-make unbound respond like an authority server.  Authority zones are also
-processed after cache, just before going to the network to fetch
-information for recursion (\fBfor\-upstream:\fR \fIyes\fR), and when used
-in this manner provide a local copy of an authority server that speeds up
-lookups of that data.
+Authority zones are processed after \fBlocal\-zones\fR and before cache
+(\fBfor\-downstream:\fR \fIyes\fR), and when used in this manner make unbound
+respond like an authority server.  Authority zones are also processed after
+cache, just before going to the network to fetch information for recursion
+(\fBfor\-upstream:\fR \fIyes\fR), and when used in this manner provide a local
+copy of an authority server that speeds up lookups of that data.
 .LP
 Authority zones can be read from zonefile.  And can be kept updated via
 AXFR and IXFR.  After update the zonefile is rewritten.  The update mechanism

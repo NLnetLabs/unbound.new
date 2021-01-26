@@ -69,6 +69,10 @@
 #define MAX_ADDR_STRLEN 128 /* characters */
 /** default value for EDNS ADVERTISED size */
 uint16_t EDNS_ADVERTISED_SIZE = 4096;
+/** default value of padding block size with encrypted queries (RFC8467) */
+uint16_t EDNS_PADDING_QUERY_BLOCK_SIZE = 128;
+/** default value of padding block size with encrypted responses (RFC8467) */
+uint16_t EDNS_PADDING_RESPONSE_BLOCK_SIZE = 468;
 
 /** minimal responses when positive answer: default is no */
 int MINIMAL_RESPONSES = 0;
