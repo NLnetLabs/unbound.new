@@ -104,10 +104,10 @@ size_t msg_cache_sizefunc(void* k, void* d);
 struct module_func_block* subnetmod_get_funcblock(void);
 
 /** subnet module init */
-int subnetmod_init(struct module_env* env, int id);
+int subnetmod_setup(struct module_env* env, int id);
 
 /** subnet module deinit */
-void subnetmod_deinit(struct module_env* env, int id);
+void subnetmod_desetup(struct module_env* env, int id);
 
 /** subnet module operate on a query */
 void subnetmod_operate(struct module_qstate* qstate, enum module_ev event,

@@ -439,10 +439,10 @@ const char* iter_state_to_string(enum iter_state state);
 int iter_state_is_responsestate(enum iter_state s);
 
 /** iterator init */
-int iter_init(struct module_env* env, int id);
+int iter_setup(struct module_env* env, int id);
 
 /** iterator deinit */
-void iter_deinit(struct module_env* env, int id);
+void iter_desetup(struct module_env* env, int id);
 
 /** iterator operate on a query */
 void iter_operate(struct module_qstate* qstate, enum module_ev event, int id,

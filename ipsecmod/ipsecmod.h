@@ -74,9 +74,9 @@ struct ipsecmod_qstate {
 };
 
 /** Init the ipsecmod module */
-int ipsecmod_init(struct module_env* env, int id);
+int ipsecmod_setup(struct module_env* env, int id);
 /** Deinit the ipsecmod module */
-void ipsecmod_deinit(struct module_env* env, int id);
+void ipsecmod_desetup(struct module_env* env, int id);
 /** Operate on an event on a query (in qstate). */
 void ipsecmod_operate(struct module_qstate* qstate, enum module_ev event,
 	int id, struct outbound_entry* outbound);

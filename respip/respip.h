@@ -192,10 +192,10 @@ int respip_rewrite_reply(const struct query_info* qinfo,
 struct module_func_block* respip_get_funcblock(void);
 
 /** response-ip init */
-int respip_init(struct module_env* env, int id);
+int respip_setup(struct module_env* env, int id);
 
 /** response-ip deinit */
-void respip_deinit(struct module_env* env, int id);
+void respip_desetup(struct module_env* env, int id);
 
 /** response-ip operate on a query */
 void respip_operate(struct module_qstate* qstate, enum module_ev event, int id,

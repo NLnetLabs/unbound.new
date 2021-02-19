@@ -252,7 +252,7 @@ daemon_init(void)
 	tzset();
 #endif
 	daemon->need_to_exit = 0;
-	modstack_init(&daemon->mods);
+	memset(&daemon->mods, 0, sizeof(daemon->mods));
 	if(!(daemon->env = (struct module_env*)calloc(1, 
 		sizeof(*daemon->env)))) {
 		free(daemon);
@@ -303,7 +303,7 @@ daemon_init(void)
 	return daemon;	
 }
 
-int 
+int
 daemon_open_shared_ports(struct daemon* daemon)
 {
 	log_assert(daemon);
@@ -380,6 +380,22 @@ daemon_open_shared_ports(struct daemon* daemon)
 		if(!(daemon->rc_ports=daemon_remote_open_ports(daemon->cfg)))
 			return 0;
 		daemon->rc_port = daemon->cfg->control_port;
+	}
+	return 1;
+}
+
+int
+daemon_privileged(struct daemon* daemon)
+{
+	if(!daemon_open_shared_ports(daemon))
+		fatal_exit("could not open ports");
+
+	daemon->env->cfg = daemon->cfg;
+	daemon->env->alloc = &daemon->superalloc;
+	daemon->env->worker = NULL;
+	if(!modstack_init(&daemon->mods, daemon->cfg->module_conf,
+		daemon->env)) {
+		fatal_exit("failed to init modules");
 	}
 	return 1;
 }

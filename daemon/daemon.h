@@ -147,12 +147,13 @@ struct daemon {
 struct daemon* daemon_init(void);
 
 /**
- * Open shared listening ports (if needed).
+ * Do daemon setup that needs privileges
+ * like opening privileged ports or opening device files.
  * The cfg member pointer must have been set for the daemon.
  * @param daemon: the daemon.
  * @return: false on error.
  */
-int daemon_open_shared_ports(struct daemon* daemon);
+int daemon_privileged(struct daemon* daemon);
 
 /**
  * Fork workers and start service.

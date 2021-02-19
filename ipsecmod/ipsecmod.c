@@ -67,7 +67,7 @@ ipsecmod_apply_cfg(struct ipsecmod_env* ipsecmod_env, struct config_file* cfg)
 }
 
 int
-ipsecmod_init(struct module_env* env, int id)
+ipsecmod_setup(struct module_env* env, int id)
 {
 	struct ipsecmod_env* ipsecmod_env = (struct ipsecmod_env*)calloc(1,
 		sizeof(struct ipsecmod_env));
@@ -85,7 +85,7 @@ ipsecmod_init(struct module_env* env, int id)
 }
 
 void
-ipsecmod_deinit(struct module_env* env, int id)
+ipsecmod_desetup(struct module_env* env, int id)
 {
 	struct ipsecmod_env* ipsecmod_env;
 	if(!env || !env->modinfo[id])
@@ -598,8 +598,9 @@ ipsecmod_get_mem(struct module_env* env, int id)
  */
 static struct module_func_block ipsecmod_block = {
 	"ipsecmod",
-	&ipsecmod_init, &ipsecmod_deinit, &ipsecmod_operate,
-	&ipsecmod_inform_super, &ipsecmod_clear, &ipsecmod_get_mem
+	&module_dummy_init, &module_dummy_init, &ipsecmod_setup,
+	&ipsecmod_desetup, &ipsecmod_operate, &ipsecmod_inform_super,
+	&ipsecmod_clear, &ipsecmod_get_mem
 };
 
 struct module_func_block*

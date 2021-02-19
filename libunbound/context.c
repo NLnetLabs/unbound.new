@@ -70,6 +70,8 @@ context_finalize(struct ub_ctx* ctx)
 		log_init(cfg->logfile, cfg->use_syslog, NULL);
 	}
 	config_apply(cfg);
+	if(!modstack_init(&ctx->mods, cfg->module_conf, ctx->env))
+		return UB_INITFAIL;
 	if(!modstack_setup(&ctx->mods, cfg->module_conf, ctx->env))
 		return UB_INITFAIL;
 	log_edns_known_options(VERB_ALGO, ctx->env);

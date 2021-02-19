@@ -246,3 +246,8 @@ copy_state_to_super(struct module_qstate* qstate, int ATTR_UNUSED(id),
 		super->was_ratelimited = qstate->was_ratelimited;
 	}
 }
+
+int module_dummy_init(struct module_env* env, int id)
+{
+	return 1;
+}

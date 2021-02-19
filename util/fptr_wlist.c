@@ -390,58 +390,78 @@ fptr_whitelist_modenv_detect_cycle(int (*fptr)(
 	return 0;
 }
 
-int 
+int
 fptr_whitelist_mod_init(int (*fptr)(struct module_env* env, int id))
 {
-	if(fptr == &iter_init) return 1;
-	else if(fptr == &val_init) return 1;
-	else if(fptr == &dns64_init) return 1;
-	else if(fptr == &respip_init) return 1;
-#ifdef WITH_PYTHONMODULE
-	else if(fptr == &pythonmod_init) return 1;
-#endif
-#ifdef WITH_DYNLIBMODULE
-	else if(fptr == &dynlibmod_init) return 1;
-#endif
-#ifdef USE_CACHEDB
-	else if(fptr == &cachedb_init) return 1;
-#endif
-#ifdef USE_IPSECMOD
-	else if(fptr == &ipsecmod_init) return 1;
-#endif
-#ifdef CLIENT_SUBNET
-	else if(fptr == &subnetmod_init) return 1;
-#endif
+	if(fptr == &module_dummy_init) return 1;
 #ifdef USE_IPSET
 	else if(fptr == &ipset_init) return 1;
 #endif
 	return 0;
 }
 
-int 
-fptr_whitelist_mod_deinit(void (*fptr)(struct module_env* env, int id))
+int
+fptr_whitelist_mod_deinit(int (*fptr)(struct module_env* env, int id))
 {
-	if(fptr == &iter_deinit) return 1;
-	else if(fptr == &val_deinit) return 1;
-	else if(fptr == &dns64_deinit) return 1;
-	else if(fptr == &respip_deinit) return 1;
+	if(fptr == &module_dummy_init) return 1;
+#ifdef USE_IPSET
+	else if(fptr == &ipset_deinit) return 1;
+#endif
+	return 0;
+}
+
+int
+fptr_whitelist_mod_setup(int (*fptr)(struct module_env* env, int id))
+{
+	if(fptr == &iter_setup) return 1;
+	else if(fptr == &val_setup) return 1;
+	else if(fptr == &dns64_setup) return 1;
+	else if(fptr == &respip_setup) return 1;
 #ifdef WITH_PYTHONMODULE
-	else if(fptr == &pythonmod_deinit) return 1;
+	else if(fptr == &pythonmod_setup) return 1;
+#endif
+#ifdef WITH_DYNLIBMODULE
+	else if(fptr == &dynlibmod_init) return 1;
+#endif
+#ifdef USE_CACHEDB
+	else if(fptr == &cachedb_setup) return 1;
+#endif
+#ifdef USE_IPSECMOD
+	else if(fptr == &ipsecmod_setup) return 1;
+#endif
+#ifdef CLIENT_SUBNET
+	else if(fptr == &subnetmod_setup) return 1;
+#endif
+#ifdef USE_IPSET
+	else if(fptr == &ipset_setup) return 1;
+#endif
+	return 0;
+}
+
+int 
+fptr_whitelist_mod_desetup(void (*fptr)(struct module_env* env, int id))
+{
+	if(fptr == &iter_desetup) return 1;
+	else if(fptr == &val_desetup) return 1;
+	else if(fptr == &dns64_desetup) return 1;
+	else if(fptr == &respip_desetup) return 1;
+#ifdef WITH_PYTHONMODULE
+	else if(fptr == &pythonmod_desetup) return 1;
 #endif
 #ifdef WITH_DYNLIBMODULE
 	else if(fptr == &dynlibmod_deinit) return 1;
 #endif
 #ifdef USE_CACHEDB
-	else if(fptr == &cachedb_deinit) return 1;
+	else if(fptr == &cachedb_desetup) return 1;
 #endif
 #ifdef USE_IPSECMOD
-	else if(fptr == &ipsecmod_deinit) return 1;
+	else if(fptr == &ipsecmod_desetup) return 1;
 #endif
 #ifdef CLIENT_SUBNET
-	else if(fptr == &subnetmod_deinit) return 1;
+	else if(fptr == &subnetmod_desetup) return 1;
 #endif
 #ifdef USE_IPSET
-	else if(fptr == &ipset_deinit) return 1;
+	else if(fptr == &ipset_desetup) return 1;
 #endif
 	return 0;
 }

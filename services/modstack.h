@@ -55,10 +55,16 @@ struct module_stack {
 };
 
 /**
- * Init a stack of modules
- * @param stack: initialised as empty.
+ * Initialises modules and assignes ids.
+ * @param stack: Expected empty, filled according to module_conf
+ * @param module_conf: string what modules to initialize
+ * @param env: module environment which is inited by the modules.
+ *	environment should have a superalloc, cfg,
+ *	env.need_to_validate is set by the modules.
+ * @return on false a module init failed.
  */
-void modstack_init(struct module_stack* stack);
+int modstack_init(struct module_stack* stack, const char* module_conf,
+	struct module_env* env);
 
 /**
  * Read config file module settings and set up the modfunc block
@@ -83,10 +89,10 @@ struct module_func_block* module_factory(const char** str);
 const char** module_list_avail(void);
 
 /**
- * Setup modules. Assigns ids and calls module_init.
- * @param stack: if not empty beforehand, it will be desetup()ed.
- *	It is then modstack_configged().
- * @param module_conf: string what modules to insert.
+ * Setup modules. Calls module_setup().
+ * @param stack: It is modstack_setupped().
+ * @param module_conf: module ordering to check against the ordering in stack.
+ * fails on changed ordering.
  * @param env: module environment which is inited by the modules.
  *	environment should have a superalloc, cfg,
  *	env.need_to_validate is set by the modules.
@@ -96,11 +102,18 @@ int modstack_setup(struct module_stack* stack, const char* module_conf,
 	struct module_env* env);
 
 /**
- * Desetup the modules, deinit, delete.
+ * Desetup the modules
  * @param stack: made empty.
  * @param env: module env for module deinit() calls.
  */
 void modstack_desetup(struct module_stack* stack, struct module_env* env);
+
+/**
+ * Deinit the modules, deinit, delete.
+ * @param stack: made empty.
+ * @param env: module env for module deinit() calls.
+ */
+void modstack_deinit(struct module_stack* stack, struct module_env* env);
 
 /**
  * Find index of module by name.

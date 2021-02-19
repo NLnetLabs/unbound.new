@@ -75,7 +75,7 @@ int UNKNOWN_SERVER_NICENESS = 376;
 static void target_count_increase_nx(struct iter_qstate* iq, int num);
 
 int 
-iter_init(struct module_env* env, int id)
+iter_setup(struct module_env* env, int id)
 {
 	struct iter_env* iter_env = (struct iter_env*)calloc(1,
 		sizeof(struct iter_env));
@@ -109,7 +109,7 @@ caps_free(struct rbnode_type* n, void* ATTR_UNUSED(d))
 }
 
 void 
-iter_deinit(struct module_env* env, int id)
+iter_desetup(struct module_env* env, int id)
 {
 	struct iter_env* iter_env;
 	if(!env || !env->modinfo[id])
@@ -3940,8 +3940,8 @@ iter_get_mem(struct module_env* env, int id)
  */
 static struct module_func_block iter_block = {
 	"iterator",
-	&iter_init, &iter_deinit, &iter_operate, &iter_inform_super, 
-	&iter_clear, &iter_get_mem
+	&module_dummy_init, &module_dummy_init, &iter_setup, &iter_desetup,
+	&iter_operate, &iter_inform_super, &iter_clear, &iter_get_mem
 };
 
 struct module_func_block* 

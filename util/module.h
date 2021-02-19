@@ -674,21 +674,40 @@ struct module_func_block {
 	/** text string name of module */
 	const char* name;
 
-	/** 
-	 * init the module. Called once for the global state.
-	 * This is the place to apply settings from the config file.
-	 * @param env: module environment.
+	/**
+	 * initialise the module. This is called only once at startup.
+	 * Privileged operations like opening device files may be done here.
 	 * @param id: module id number.
 	 * return: 0 on error
 	 */
 	int (*init)(struct module_env* env, int id);
 
 	/**
-	 * de-init, delete, the module. Called once for the global state.
+	 * deinitialise the module. This is called only once before shutdown to
+	 * free resources allocated during init().
+	 * Closing privileged ports or files must be done here.
+	 * @param id: module id number.
+	 * return: 0 on error
+	 */
+	int (*deinit)(struct module_env* env, int id);
+
+	/**
+	 * setup the module. Called when restarting or reloading the
+	 * daemon.
+	 * This is the place to apply settings from the config file.
+	 * @param env: module environment.
+	 * @param id: module id number.
+	 * return: 0 on error
+	 */
+	int (*setup)(struct module_env* env, int id);
+
+	/**
+	 * de-setup, undo stuff done during setup().
+	 * Called before reloading the daemon.
 	 * @param env: module environment.
 	 * @param id: module id number.
 	 */
-	void (*deinit)(struct module_env* env, int id);
+	void (*desetup)(struct module_env* env, int id);
 
 	/**
 	 * accept a new query, or work further on existing query.
@@ -859,5 +878,7 @@ void log_edns_known_options(enum verbosity_value level,
  */
 void copy_state_to_super(struct module_qstate* qstate, int id,
 	struct module_qstate* super);
+
+int module_dummy_init(struct module_env* env, int id);
 
 #endif /* UTIL_MODULE_H */

@@ -231,10 +231,10 @@ struct module_func_block* val_get_funcblock(void);
 const char* val_state_to_string(enum val_state state);
 
 /** validator init */
-int val_init(struct module_env* env, int id);
+int val_setup(struct module_env* env, int id);
 
 /** validator deinit */
-void val_deinit(struct module_env* env, int id);
+void val_desetup(struct module_env* env, int id);
 
 /** validator operate on a query */
 void val_operate(struct module_qstate* qstate, enum module_ev event, int id,

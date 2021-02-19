@@ -88,14 +88,7 @@ count_modules(const char* s)
         return num;
 }
 
-void 
-modstack_init(struct module_stack* stack)
-{
-	stack->num = 0;
-	stack->mod = NULL;
-}
-
-int 
+int
 modstack_config(struct module_stack* stack, const char* module_conf)
 {
         int i;
@@ -219,18 +212,17 @@ module_func_block* module_factory(const char** str)
         return NULL;
 }
 
-int 
-modstack_setup(struct module_stack* stack, const char* module_conf,
+int
+modstack_init(struct module_stack* stack, const char* module_conf,
 	struct module_env* env)
 {
-        int i;
-        if(stack->num != 0)
-                modstack_desetup(stack, env);
+	int i;
+	if (stack->num != 0)
+		fatal_exit("unexpected already initialised modules");
         /* fixed setup of the modules */
         if(!modstack_config(stack, module_conf)) {
 		return 0;
         }
-        env->need_to_validate = 0; /* set by module init below */
         for(i=0; i<stack->num; i++) {
                 verbose(VERB_OPS, "init module %d: %s",
                         i, stack->mod[i]->name);
@@ -244,8 +236,45 @@ modstack_setup(struct module_stack* stack, const char* module_conf,
 	return 1;
 }
 
-void 
+int
+modstack_setup(struct module_stack* stack, const char* module_conf,
+	struct module_env* env)
+{
+        int i;
+        env->need_to_validate = 0; /* set by module setup below */
+        for(i=0; i<stack->num; i++) {
+		while(*module_conf && isspace(*module_conf))
+			module_conf++;
+                if(strncmp(stack->mod[i]->name, module_conf,
+			strlen(stack->mod[i]->name))) {
+			log_err("changed module ordering during reload not supported");
+			return 0;
+		}
+		module_conf += strlen(stack->mod[i]->name);
+                verbose(VERB_OPS, "setup module %d: %s",
+                        i, stack->mod[i]->name);
+                fptr_ok(fptr_whitelist_mod_setup(stack->mod[i]->setup));
+                if(!(*stack->mod[i]->setup)(env, i)) {
+                        log_err("module setup for module %s failed",
+                                stack->mod[i]->name);
+			return 0;
+                }
+        }
+	return 1;
+}
+
+void
 modstack_desetup(struct module_stack* stack, struct module_env* env)
+{
+        int i;
+        for(i=0; i<stack->num; i++) {
+                fptr_ok(fptr_whitelist_mod_desetup(stack->mod[i]->desetup));
+                (*stack->mod[i]->desetup)(env, i);
+        }
+}
+
+void
+modstack_deinit(struct module_stack* stack, struct module_env* env)
 {
         int i;
         for(i=0; i<stack->num; i++) {
@@ -257,7 +286,7 @@ modstack_desetup(struct module_stack* stack, struct module_env* env)
         stack->mod = NULL;
 }
 
-int 
+int
 modstack_find(struct module_stack* stack, const char* name)
 {
 	int i;

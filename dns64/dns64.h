@@ -50,10 +50,10 @@
 struct module_func_block *dns64_get_funcblock(void);
 
 /** dns64 init */
-int dns64_init(struct module_env* env, int id);
+int dns64_setup(struct module_env* env, int id);
 
 /** dns64 deinit */
-void dns64_deinit(struct module_env* env, int id);
+void dns64_desetup(struct module_env* env, int id);
 
 /** dns64 operate on a query */
 void dns64_operate(struct module_qstate* qstate, enum module_ev event, int id,

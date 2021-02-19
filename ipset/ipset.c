@@ -17,9 +17,21 @@
 #include "sldns/wire2str.h"
 #include "sldns/parseutil.h"
 
+#include <stdint.h>
+
+#ifdef HAVE_NET_PFVAR_H
+#include <fcntl.h>
+#include <sys/ioctl.h>
+#include <netinet/in.h>
+#include <net/if.h>
+#include <net/pfvar.h>
+typedef intptr_t filter_dev;
+#else
 #include <libmnl/libmnl.h>
 #include <linux/netfilter/nfnetlink.h>
 #include <linux/netfilter/ipset/ip_set.h>
+typedef struct mnl_socket * filter_dev;
+#endif
 
 #define BUFF_LEN 256
 
@@ -41,24 +53,95 @@ static int error_response(struct module_qstate* qstate, int id, int rcode) {
 	return 0;
 }
 
-static struct mnl_socket * open_mnl_socket() {
-	struct mnl_socket *mnl;
+#ifdef HAVE_NET_PFVAR_H
+static void * open_filter() {
+	filter_dev dev;
 
-	mnl = mnl_socket_open(NETLINK_NETFILTER);
-	if (!mnl) {
+	dev = open("/dev/pf", O_RDWR);
+	if (dev == -1) {
+		log_err("open(\"/dev/pf\") failed");
+		return NULL;
+	}
+	else
+		return (void *)dev;
+}
+#else
+static void * open_filter() {
+	filter_dev dev;
+
+	dev = mnl_socket_open(NETLINK_NETFILTER);
+	if (!dev) {
 		log_err("ipset: could not open netfilter.");
 		return NULL;
 	}
 
-	if (mnl_socket_bind(mnl, 0, MNL_SOCKET_AUTOPID) < 0) {
-		mnl_socket_close(mnl);
+	if (mnl_socket_bind(dev, 0, MNL_SOCKET_AUTOPID) < 0) {
+		mnl_socket_close(dev);
 		log_err("ipset: could not bind netfilter.");
 		return NULL;
 	}
-	return mnl;
+	return dev;
 }
+#endif
 
-static int add_to_ipset(struct mnl_socket *mnl, const char *setname, const void *ipaddr, int af) {
+#ifdef HAVE_NET_PFVAR_H
+static int add_to_ipset(filter_dev dev, const char *setname, const void *ipaddr, int af) {
+	struct pfioc_table io;
+	struct pfr_addr addr;
+	const char *p;
+	int i;
+
+	bzero(&io, sizeof(io));
+	bzero(&addr, sizeof(addr));
+
+	p = strrchr(setname, '/');
+	if (p) {
+		i = p - setname;
+		if (i >= PATH_MAX) {
+			errno = ENAMETOOLONG;
+			return -1;
+		}
+		memcpy(io.pfrio_table.pfrt_anchor, setname, i);
+		if (i < PATH_MAX)
+			io.pfrio_table.pfrt_anchor[i] = '\0';
+		p++;
+	}
+	else
+		p = setname;
+
+	if (strlen(p) >= PF_TABLE_NAME_SIZE) {
+		errno = ENAMETOOLONG;
+		return -1;
+	}
+	strlcpy(io.pfrio_table.pfrt_name, p, PF_TABLE_NAME_SIZE);
+
+	io.pfrio_buffer = &addr;
+	io.pfrio_size = 1;
+	io.pfrio_esize = sizeof(addr);
+
+	switch (af) {
+		case AF_INET:
+			addr.pfra_ip4addr = *(struct in_addr *)ipaddr;
+			addr.pfra_net = 32;
+			break;
+		case AF_INET6:
+			addr.pfra_ip6addr = *(struct in6_addr *)ipaddr;
+			addr.pfra_net = 128;
+			break;
+		default:
+		errno = EAFNOSUPPORT;
+		return -1;
+	}
+	addr.pfra_af = af;
+
+	if (ioctl(dev, DIOCRADDADDRS, &io) == -1) {
+		log_err("ioctl failed: %s", strerror(errno));
+		return -1;
+	}
+	return 0;
+}
+#else
+static int add_to_ipset(filter_dev dev, const char *setname, const void *ipaddr, int af) {
 	struct nlmsghdr *nlh;
 	struct nfgenmsg *nfg;
 	struct nlattr *nested[2];
@@ -91,14 +174,15 @@ static int add_to_ipset(struct mnl_socket *mnl, const char *setname, const void 
 	mnl_attr_nest_end(nlh, nested[1]);
 	mnl_attr_nest_end(nlh, nested[0]);
 
-	if (mnl_socket_sendto(mnl, nlh, nlh->nlmsg_len) < 0) {
+	if (mnl_socket_sendto(dev, nlh, nlh->nlmsg_len) < 0) {
 		return -1;
 	}
 	return 0;
 }
+#endif
 
 static void
-ipset_add_rrset_data(struct ipset_env *ie, struct mnl_socket *mnl,
+ipset_add_rrset_data(struct ipset_env *ie,
 	struct packed_rrset_data *d, const char* setname, int af,
 	const char* dname)
 {
@@ -123,12 +207,16 @@ ipset_add_rrset_data(struct ipset_env *ie, struct mnl_socket *mnl,
 					snprintf(ip, sizeof(ip), "(inet_ntop_error)");
 				verbose(VERB_QUERY, "ipset: add %s to %s for %s", ip, setname, dname);
 			}
-			ret = add_to_ipset(mnl, setname, rr_data + 2, af);
+			ret = add_to_ipset((filter_dev)ie->dev, setname, rr_data + 2, af);
 			if (ret < 0) {
 				log_err("ipset: could not add %s into %s", dname, setname);
 
-				mnl_socket_close(mnl);
-				ie->mnl = NULL;
+#if HAVE_NET_PFVAR_H
+				/* don't close as we might not be able to open again due to dropped privs */
+#else
+				mnl_socket_close((filter_dev)ie->dev);
+				ie->dev = NULL;
+#endif
 				break;
 			}
 		}
@@ -137,7 +225,7 @@ ipset_add_rrset_data(struct ipset_env *ie, struct mnl_socket *mnl,
 
 static int
 ipset_check_zones_for_rrset(struct module_env *env, struct ipset_env *ie,
-	struct mnl_socket *mnl, struct ub_packed_rrset_key *rrset,
+	struct ub_packed_rrset_key *rrset,
 	const char *setname, int af)
 {
 	static char dname[BUFF_LEN];
@@ -158,13 +246,16 @@ ipset_check_zones_for_rrset(struct module_env *env, struct ipset_env *ie,
 
 	for (p = env->cfg->local_zones_ipset; p; p = p->next) {
 		plen = strlen(p->str);
+		if (p->str[plen - 1] == '.') {
+			plen--;
+		}
 
 		if (dlen >= plen) {
 			s = dname + (dlen - plen);
 
 			if (strncasecmp(p->str, s, plen) == 0) {
 				d = (struct packed_rrset_data*)rrset->entry.data;
-				ipset_add_rrset_data(ie, mnl, d, setname,
+				ipset_add_rrset_data(ie, d, setname,
 					af, dname);
 				break;
 			}
@@ -174,8 +265,6 @@ ipset_check_zones_for_rrset(struct module_env *env, struct ipset_env *ie,
 }
 
 static int ipset_update(struct module_env *env, struct dns_msg *return_msg, struct ipset_env *ie) {
-	struct mnl_socket *mnl;
-
 	size_t i;
 
 	const char *setname;
@@ -184,17 +273,17 @@ static int ipset_update(struct module_env *env, struct dns_msg *return_msg, stru
 
 	int af;
 
-
-	mnl = (struct mnl_socket *)ie->mnl;
-	if (!mnl) {
+#ifdef HAVE_NET_PFVAR_H
+#else
+	if (!ie->dev) {
 		// retry to create mnl socket
-		mnl = open_mnl_socket();
-		if (!mnl) {
+		ie->dev = open_filter();
+		if (!ie->dev) {
+			log_warn("ipset open_filter failed");
 			return -1;
 		}
-
-		ie->mnl = mnl;
 	}
+#endif
 
 	for (i = 0; i < return_msg->rep->rrset_count; ++i) {
 		setname = NULL;
@@ -203,18 +292,18 @@ static int ipset_update(struct module_env *env, struct dns_msg *return_msg, stru
 
 		if (rrset->rk.type == htons(LDNS_RR_TYPE_A)) {
 			af = AF_INET;
-			if ((ie->v4_enabled == 1)) {
+			if (ie->v4_enabled == 1) {
 				setname = ie->name_v4;
 			}
 		} else {
 			af = AF_INET6;
-			if ((ie->v6_enabled == 1)) {
+			if (ie->v6_enabled == 1) {
 				setname = ie->name_v6;
 			}
 		}
 
 		if (setname) {
-			if(ipset_check_zones_for_rrset(env, ie, mnl, rrset,
+			if(ipset_check_zones_for_rrset(env, ie, rrset,
 				setname, af) == -1)
 				return -1;
 		}
@@ -226,7 +315,7 @@ static int ipset_update(struct module_env *env, struct dns_msg *return_msg, stru
 int ipset_init(struct module_env* env, int id) {
 	struct ipset_env *ipset_env;
 
-	ipset_env = (struct ipset_env *)calloc(1, sizeof(struct ipset_env));
+	ipset_env = (struct ipset_env *)malloc(sizeof(struct ipset_env));
 	if (!ipset_env) {
 		log_err("malloc failure");
 		return 0;
@@ -234,7 +323,28 @@ int ipset_init(struct module_env* env, int id) {
 
 	env->modinfo[id] = (void *)ipset_env;
 
-	ipset_env->mnl = NULL;
+#ifdef HAVE_NET_PFVAR_H
+	ipset_env->dev = open_filter();
+	if (!ipset_env->dev) {
+		log_err("ipset open_filter failed");
+		return 0;
+	}
+#else
+	ipset_env->dev = NULL;
+#endif
+	return 1;
+}
+
+int ipset_deinit(struct module_env* env, int id) {
+	struct ipset_env *ipset_env = env->modinfo[id];
+	close((filter_dev)ipset_env->dev);
+	free(ipset_env);
+	env->modinfo[id] = NULL;
+	return 1;
+}
+
+int ipset_setup(struct module_env* env, int id) {
+	struct ipset_env *ipset_env = env->modinfo[id];
 
 	ipset_env->name_v4 = env->cfg->ipset_name_v4;
 	ipset_env->name_v6 = env->cfg->ipset_name_v6;
@@ -250,8 +360,8 @@ int ipset_init(struct module_env* env, int id) {
 	return 1;
 }
 
-void ipset_deinit(struct module_env *env, int id) {
-	struct mnl_socket *mnl;
+void ipset_desetup(struct module_env *env, int id) {
+	filter_dev dev;
 	struct ipset_env *ipset_env;
 
 	if (!env || !env->modinfo[id]) {
@@ -260,10 +370,14 @@ void ipset_deinit(struct module_env *env, int id) {
 
 	ipset_env = (struct ipset_env *)env->modinfo[id];
 
-	mnl = (struct mnl_socket *)ipset_env->mnl;
-	if (mnl) {
-		mnl_socket_close(mnl);
-		ipset_env->mnl = NULL;
+	dev = (filter_dev)ipset_env->dev;
+	if (dev) {
+#if HAVE_NET_PFVAR_H
+		close(dev);
+#else
+		mnl_socket_close(dev);
+#endif
+		ipset_env->dev = NULL;
 	}
 
 	free(ipset_env);
@@ -373,8 +487,8 @@ size_t ipset_get_mem(struct module_env *env, int id) {
  */
 static struct module_func_block ipset_block = {
 	"ipset",
-	&ipset_init, &ipset_deinit, &ipset_operate,
-	&ipset_inform_super, &ipset_clear, &ipset_get_mem
+	&ipset_init, &ipset_deinit, &ipset_setup, &ipset_desetup,
+	&ipset_operate, &ipset_inform_super, &ipset_clear, &ipset_get_mem
 };
 
 struct module_func_block * ipset_get_funcblock(void) {

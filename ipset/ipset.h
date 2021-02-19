@@ -37,7 +37,7 @@ extern "C" {
 #endif
 
 struct ipset_env {
-    void* mnl;
+	void* dev;
 
 	int v4_enabled;
 	int v6_enabled;
@@ -53,7 +53,11 @@ struct ipset_qstate {
 /** Init the ipset module */
 int ipset_init(struct module_env* env, int id);
 /** Deinit the ipset module */
-void ipset_deinit(struct module_env* env, int id);
+int ipset_deinit(struct module_env* env, int id);
+/** Setup the ipset module */
+int ipset_setup(struct module_env* env, int id);
+/** Desetup the ipset module */
+void ipset_desetup(struct module_env* env, int id);
 /** Operate on an event on a query (in qstate). */
 void ipset_operate(struct module_qstate* qstate, enum module_ev event,
 	int id, struct outbound_entry* outbound);

@@ -21554,7 +21554,22 @@ $as_echo "#define USE_IPSET 1" >>confdefs.h
 		IPSET_OBJ="ipset.lo"
 
 
-		# mnl
+		# BSD's pf
+		for ac_header in net/pfvar.h
+do :
+  ac_fn_c_check_header_compile "$LINENO" "net/pfvar.h" "ac_cv_header_net_pfvar_h" "
+		  #include <netinet/in.h>
+		  #include <net/if.h>
+
+"
+if test "x$ac_cv_header_net_pfvar_h" = xyes; then :
+  cat >>confdefs.h <<_ACEOF
+#define HAVE_NET_PFVAR_H 1
+_ACEOF
+
+else
+
+		  # mnl
 
 # Check whether --with-libmnl was given.
 if test "${with_libmnl+set}" = set; then :
@@ -21563,28 +21578,34 @@ else
    withval="yes"
 fi
 
-		found_libmnl="no"
-		{ $as_echo "$as_me:${as_lineno-$LINENO}: checking for libmnl" >&5
+		  found_libmnl="no"
+		  { $as_echo "$as_me:${as_lineno-$LINENO}: checking for libmnl" >&5
 $as_echo_n "checking for libmnl... " >&6; }
-		if test x_$withval = x_ -o x_$withval = x_yes; then
-			withval="/usr/local /opt/local /usr/lib /usr/pkg /usr/sfw /usr"
-		fi
-		for dir in $withval ; do
-			if test -f "$dir/include/libmnl/libmnl.h"; then
-				found_libmnl="yes"
-								if test "$dir" != "/usr"; then
-					CPPFLAGS="$CPPFLAGS -I$dir/include"
-					LDFLAGS="$LDFLAGS -L$dir/lib"
-				fi
-				{ $as_echo "$as_me:${as_lineno-$LINENO}: result: found in $dir" >&5
+		  if test x_$withval = x_ -o x_$withval = x_yes; then
+			  withval="/usr/local /opt/local /usr/lib /usr/pkg /usr/sfw /usr"
+		  fi
+		  for dir in $withval ; do
+			  if test -f "$dir/include/libmnl/libmnl.h"; then
+				  found_libmnl="yes"
+				  				  if test "$dir" != "/usr"; then
+					  CPPFLAGS="$CPPFLAGS -I$dir/include"
+					  LDFLAGS="$LDFLAGS -L$dir/lib"
+				  fi
+				  { $as_echo "$as_me:${as_lineno-$LINENO}: result: found in $dir" >&5
 $as_echo "found in $dir" >&6; }
-				LIBS="$LIBS -lmnl"
-				break;
-			fi
-		done
-		if test x_$found_libmnl != x_yes; then
-			as_fn_error $? "Could not find libmnl, libmnl.h" "$LINENO" 5
-		fi
+				  LIBS="$LIBS -lmnl"
+				  break;
+			  fi
+		  done
+		  if test x_$found_libmnl != x_yes
+		  then
+			  as_fn_error $? "Could not find libmnl, libmnl.h" "$LINENO" 5
+		  fi
+
+fi
+
+done
+
 		;;
     no|*)
     	# nothing

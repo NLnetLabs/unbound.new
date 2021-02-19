@@ -270,12 +270,20 @@ int fptr_whitelist_modenv_detect_cycle(int (*fptr)(
 int fptr_whitelist_mod_init(int (*fptr)(struct module_env* env, int id));
 
 /**
- * Check function pointer whitelist for module deinit call values.
+ * Check function pointer whitelist for module setup call values.
  *
  * @param fptr: function pointer to check.
  * @return false if not in whitelist.
  */
-int fptr_whitelist_mod_deinit(void (*fptr)(struct module_env* env, int id));
+int fptr_whitelist_mod_setup(int (*fptr)(struct module_env* env, int id));
+
+/**
+ * Check function pointer whitelist for module desetup call values.
+ *
+ * @param fptr: function pointer to check.
+ * @return false if not in whitelist.
+ */
+int fptr_whitelist_mod_desetup(void (*fptr)(struct module_env* env, int id));
 
 /**
  * Check function pointer whitelist for module operate call values.

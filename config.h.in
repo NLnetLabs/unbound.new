@@ -381,6 +381,9 @@
 /* Define to 1 if you have the <nettle/eddsa.h> header file. */
 #undef HAVE_NETTLE_EDDSA_H
 
+/* Define to 1 if you have the <net/pfvar.h> header file. */
+#undef HAVE_NET_PFVAR_H
+
 /* Define to 1 if you have the <net/if.h> header file. */
 #undef HAVE_NET_IF_H
 

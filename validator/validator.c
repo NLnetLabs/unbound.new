@@ -165,7 +165,7 @@ val_apply_cfg(struct module_env* env, struct val_env* val_env,
 void ecdsa_evp_workaround_init(void);
 #endif
 int
-val_init(struct module_env* env, int id)
+val_setup(struct module_env* env, int id)
 {
 	struct val_env* val_env = (struct val_env*)calloc(1,
 		sizeof(struct val_env));
@@ -190,7 +190,7 @@ val_init(struct module_env* env, int id)
 }
 
 void
-val_deinit(struct module_env* env, int id)
+val_desetup(struct module_env* env, int id)
 {
 	struct val_env* val_env;
 	if(!env || !env->modinfo[id])
@@ -2895,8 +2895,8 @@ val_get_mem(struct module_env* env, int id)
  */
 static struct module_func_block val_block = {
 	"validator",
-	&val_init, &val_deinit, &val_operate, &val_inform_super, &val_clear,
-	&val_get_mem
+	&module_dummy_init, &module_dummy_init, &val_setup, &val_desetup,
+	&val_operate, &val_inform_super, &val_clear, &val_get_mem
 };
 
 struct module_func_block* 

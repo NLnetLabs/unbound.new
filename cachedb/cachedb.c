@@ -229,7 +229,7 @@ cachedb_apply_cfg(struct cachedb_env* cachedb_env, struct config_file* cfg)
 }
 
 int 
-cachedb_init(struct module_env* env, int id)
+cachedb_setup(struct module_env* env, int id)
 {
 	struct cachedb_env* cachedb_env = (struct cachedb_env*)calloc(1,
 		sizeof(struct cachedb_env));
@@ -268,7 +268,7 @@ cachedb_init(struct module_env* env, int id)
 }
 
 void 
-cachedb_deinit(struct module_env* env, int id)
+cachedb_desetup(struct module_env* env, int id)
 {
 	struct cachedb_env* cachedb_env;
 	if(!env || !env->modinfo[id])
@@ -847,7 +847,7 @@ cachedb_get_mem(struct module_env* env, int id)
  */
 static struct module_func_block cachedb_block = {
 	"cachedb",
-	&cachedb_init, &cachedb_deinit, &cachedb_operate,
+	&module_dummy_init, &module_dummy_init, &cachedb_setup, &cachedb_desetup, &cachedb_operate,
 	&cachedb_inform_super, &cachedb_clear, &cachedb_get_mem
 };
 

@@ -399,7 +399,7 @@ dns64_apply_cfg(struct dns64_env* dns64_env, struct config_file* cfg)
  * \param id  This instance's ID number.
  */
 int
-dns64_init(struct module_env* env, int id)
+dns64_setup(struct module_env* env, int id)
 {
     struct dns64_env* dns64_env =
         (struct dns64_env*)calloc(1, sizeof(struct dns64_env));
@@ -433,7 +433,7 @@ free_ignore_aaaa_node(rbnode_type* node, void* ATTR_UNUSED(arg))
  * \param id  This instance's ID number.
  */
 void
-dns64_deinit(struct module_env* env, int id)
+dns64_desetup(struct module_env* env, int id)
 {
     struct dns64_env* dns64_env;
     if (!env)
@@ -1024,8 +1024,8 @@ dns64_get_mem(struct module_env* env, int id)
  */
 static struct module_func_block dns64_block = {
 	"dns64",
-	&dns64_init, &dns64_deinit, &dns64_operate, &dns64_inform_super,
-	&dns64_clear, &dns64_get_mem
+	&module_dummy_init, &module_dummy_init, &dns64_setup, &dns64_desetup,
+	&dns64_operate, &dns64_inform_super, &dns64_clear, &dns64_get_mem
 };
 
 /**

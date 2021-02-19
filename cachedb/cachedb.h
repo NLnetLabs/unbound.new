@@ -90,9 +90,9 @@ struct cachedb_backend {
 #define CACHEDB_HASHSIZE 256 /* bit hash */
 
 /** Init the cachedb module */
-int cachedb_init(struct module_env* env, int id);
+int cachedb_setup(struct module_env* env, int id);
 /** Deinit the cachedb module */
-void cachedb_deinit(struct module_env* env, int id);
+void cachedb_desetup(struct module_env* env, int id);
 /** Operate on an event on a query (in qstate). */
 void cachedb_operate(struct module_qstate* qstate, enum module_ev event,
 	int id, struct outbound_entry* outbound);
