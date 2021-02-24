@@ -493,6 +493,57 @@ fill_res(struct ub_result* res, struct ub_packed_rrset_key* answer,
 	return 1;
 }
 
+/** fill authority_data into result */
+static int
+fill_res_authority(struct ub_result* res, struct ub_packed_rrset_key* answer,
+	struct query_info* rq, struct reply_info* rep)
+{
+	size_t i;
+	struct packed_rrset_data* authority_data;
+	res->authority_ttl = 0;
+	if(!answer) {
+		if(rep->rrset_count != 0)
+			res->authority_ttl = (int)rep->ttl;
+		res->authority_data = (char**)calloc(1, sizeof(char*));
+		res->authority_len = (int*)calloc(1, sizeof(int));
+		return (res->authority_data && res->authority_len);
+	}
+	authority_data = (struct packed_rrset_data*)answer->entry.data;
+	if(query_dname_compare(rq->qname, answer->rk.dname) != 0) {
+		if(!fill_canon(res, answer->rk.dname))
+			return 0; /* out of memory */
+	} else	res->canonname = NULL;
+	res->authority_data = (char**)calloc(authority_data->count+1, sizeof(char*));
+	res->authority_len = (int*)calloc(authority_data->count+1, sizeof(int));
+	if(!res->authority_data || !res->authority_len)
+		return 0; /* out of memory */
+	for(i=0; i<authority_data->count; i++) {
+		/* remove rdauthority_length from rauthority_data */
+		res->authority_len[i] = (int)(authority_data->rr_len[i] - 2);
+		res->authority_data[i] = memdup(authority_data->rr_data[i]+2, (size_t)res->authority_len[i]);
+		if(!res->authority_data[i])
+			return 0; /* out of memory */
+	}
+	/* authority_ttl for positive answers, from CNAME and answer RRs */
+	if(authority_data->count != 0) {
+		size_t j;
+		res->authority_ttl = (int)authority_data->ttl;
+		for(j=0; j<rep->ns_numrrsets; j++) {
+			struct packed_rrset_data* d =
+				(struct packed_rrset_data*)rep->rrsets[rep->an_numrrsets + j]->
+				entry.data;
+			if((int)d->ttl < res->authority_ttl)
+				res->authority_ttl = (int)d->ttl;
+		}
+	}
+	/* authority_ttl for negative answers */
+	if(authority_data->count == 0 && rep->rrset_count != 0)
+		res->authority_ttl = (int)rep->ttl;
+	res->authority_data[authority_data->count] = NULL;
+	res->authority_len[authority_data->count] = 0;
+	return 1;
+}
+
 /** fill result from parsed message, on error fills servfail */
 void
 libworker_enter_result(struct ub_result* res, sldns_buffer* buf,
@@ -506,6 +557,10 @@ libworker_enter_result(struct ub_result* res, sldns_buffer* buf,
 		log_err("cannot parse buf");
 		return; /* error parsing buf, or out of memory */
 	}
+	struct ub_packed_rrset_key *authority_rrset = reply_find_rrset_section_ns(rep, rq.qname, rq.qname_len, rq.qtype, rq.qclass);
+	if(!fill_res_authority(res, authority_rrset, &rq, rep))
+		return; /* out of memory */
+
 	if(!fill_res(res, reply_find_answer_rrset(&rq, rep), 
 		reply_find_final_cname_target(&rq, rep), &rq, rep))
 		return; /* out of memory */
