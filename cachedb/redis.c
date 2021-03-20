@@ -80,6 +80,7 @@ redis_connect(const struct redis_moddata* moddata)
 		log_err("failed to set redis timeout");
 		goto fail;
 	}
+	verbose(VERB_OPS, "Connection to Redis established");
 	return ctx;
 
   fail:
@@ -94,7 +95,7 @@ redis_init(struct module_env* env, struct cachedb_env* cachedb_env)
 	int i;
 	struct redis_moddata* moddata = NULL;
 
-	verbose(VERB_ALGO, "redis_init");
+	verbose(VERB_OPS, "Redis initialization");
 
 	moddata = calloc(1, sizeof(struct redis_moddata));
 	if(!moddata) {
@@ -154,7 +155,7 @@ redis_deinit(struct module_env* env, struct cachedb_env* cachedb_env)
 		cachedb_env->backend_data;
 	(void)env;
 
-	verbose(VERB_ALGO, "redis_deinit");
+	verbose(VERB_OPS, "Redis deinitialization");
 
 	if(!moddata)
 		return;
