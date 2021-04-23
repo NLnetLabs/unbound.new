@@ -153,6 +153,13 @@ else
 	else on_mingw="no"; fi
 fi
 
+# are we on Linux?
+if uname -s 2>&1 | grep -i linux >/dev/null; then on_linux="yes"
+else
+	if echo $host $target | grep linux >/dev/null; then on_linux="yes"
+	else on_linux="no"; fi
+fi
+
 #
 # Determine configuration file
 # the eval is to evaluate shell expansion twice
@@ -1850,6 +1857,17 @@ case "$enable_explicit_port_randomisation" in
 	yes|*)
 		;;
 esac
+
+if test $on_linux = "yes"; then
+	AC_ARG_ENABLE(linux-ip-local-port-range, AC_HELP_STRING([--enable-linux-ip-local-port-range], [WARNING! This is only for the libunbound on Linux and does not affect unbound resolving daemon itself. This may severely limit the number of available outgoing ports and thus decrease randomness. Use this option only when the target system restricts the use of non-ephemeral ports. (e.g. some of SELinux enabled distributions) Enable this option to use /proc/sys/net/ipv4/ip_local_port_range as a default outgoing port range]))
+	case "$enable_linux_ip_local_port_range" in
+		yes)
+			AC_DEFINE([USE_LINUX_IP_LOCAL_PORT_RANGE], [1], [WARNING! This is only for the libunbound on Linux and does not affect unbound resolving daemon itself. This may severely limit the number of available outgoing ports and thus decrease randomness. Define this only when the target system restricts (e.g. some of SELinux enabled distributions) the use of non-ephemeral ports. Define this to enable use of /proc/sys/net/ipv4/ip_local_port_range as a default outgoing port range.])
+			;;
+		no|*)
+			;;
+	esac
+fi
 
 
 AC_MSG_CHECKING([if ${MAKE:-make} supports $< with implicit rule in scope])

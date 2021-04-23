@@ -1177,6 +1177,13 @@ int cfg_mark_ports(const char* str, int allow, int* avail, int num);
 int cfg_condense_ports(struct config_file* cfg, int** avail);
 
 /**
+ * Apply system specific port range policy.
+ * @param cfg: config file.
+ * @param num: size of the array (65536).
+ */
+void cfg_apply_local_port_policy(struct config_file* cfg, int num);
+
+/**
  * Scan ports available
  * @param avail: the array from cfg.
  * @param num: size of the array (65536).
@@ -1316,4 +1323,8 @@ int if_is_https(const char* ifname, const char* port, int https_port);
 int cfg_has_https(struct config_file* cfg);
 
 #endif /* UTIL_CONFIG_FILE_H */
+
+#ifdef USE_LINUX_IP_LOCAL_PORT_RANGE
+#define LINUX_IP_LOCAL_PORT_RANGE_PATH "/proc/sys/net/ipv4/ip_local_port_range"
+#endif
 

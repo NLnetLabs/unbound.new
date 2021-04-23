@@ -900,6 +900,7 @@ enable_ipsecmod
 enable_ipset
 with_libmnl
 enable_explicit_port_randomisation
+enable_linux_ip_local_port_range
 with_libunbound_only
 '
       ac_precious_vars='build_alias
@@ -1592,6 +1593,16 @@ Optional Features:
   --disable-explicit-port-randomisation
                           disable explicit source port randomisation and rely
                           on the kernel to provide random source ports
+  --enable-linux-ip-local-port-range
+                          WARNING! This is only for the libunbound on Linux
+                          and does not affect unbound resolving daemon itself.
+                          This may severely limit the number of available
+                          outgoing ports and thus decrease randomness. Use
+                          this option only when the target system restricts
+                          the use of non-ephemeral ports. (e.g. some of
+                          SELinux enabled distributions) Enable this option to
+                          use /proc/sys/net/ipv4/ip_local_port_range as a
+                          default outgoing port range
 
 Optional Packages:
   --with-PACKAGE[=ARG]    use PACKAGE [ARG=yes]
@@ -4203,6 +4214,13 @@ if uname -s 2>&1 | grep MINGW32 >/dev/null; then on_mingw="yes"
 else
 	if echo $host $target | grep mingw32 >/dev/null; then on_mingw="yes"
 	else on_mingw="no"; fi
+fi
+
+# are we on Linux?
+if uname -s 2>&1 | grep -i linux >/dev/null; then on_linux="yes"
+else
+	if echo $host $target | grep linux >/dev/null; then on_linux="yes"
+	else on_linux="no"; fi
 fi
 
 #
@@ -21596,6 +21614,23 @@ $as_echo "#define DISABLE_EXPLICIT_PORT_RANDOMISATION 1" >>confdefs.h
 	yes|*)
 		;;
 esac
+
+if test $on_linux = "yes"; then
+	# Check whether --enable-linux-ip-local-port-range was given.
+if test "${enable_linux_ip_local_port_range+set}" = set; then :
+  enableval=$enable_linux_ip_local_port_range;
+fi
+
+	case "$enable_linux_ip_local_port_range" in
+		yes)
+
+$as_echo "#define USE_LINUX_IP_LOCAL_PORT_RANGE 1" >>confdefs.h
+
+			;;
+		no|*)
+			;;
+	esac
+fi
 
 
 { $as_echo "$as_me:${as_lineno-$LINENO}: checking if ${MAKE:-make} supports $< with implicit rule in scope" >&5

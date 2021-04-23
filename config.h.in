@@ -853,6 +853,14 @@
 /* Define if you enable libevent */
 #undef USE_LIBEVENT
 
+/* WARNING! This is only for the libunbound on Linux and does not affect
+   unbound resolving daemon itself. This may severely limit the number of
+   available outgoing ports and thus decrease randomness. Define this only
+   when the target system restricts (e.g. some of SELinux enabled
+   distributions) the use of non-ephemeral ports. Define this to enable use of
+   /proc/sys/net/ipv4/ip_local_port_range as a default outgoing port range. */
+#undef USE_LINUX_IP_LOCAL_PORT_RANGE
+
 /* Define if you want to use internal select based events */
 #undef USE_MINI_EVENT
 
