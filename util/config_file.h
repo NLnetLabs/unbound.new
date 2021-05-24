@@ -438,6 +438,8 @@ struct config_file {
 	struct config_str3list* acl_tag_actions;
 	/** list of aclname, tagname, redirectdata */
 	struct config_str3list* acl_tag_datas;
+	/** list of matching destinations for views */
+	struct config_strobjlist* view_destinations;
 	/** list of aclname, view*/
 	struct config_str2list* acl_view;
 	/** list of IP-netblock, tagbitlist */
@@ -730,6 +732,18 @@ struct config_auth {
 };
 
 /**
+ * List of string/object pairs for config options
+ */
+struct config_strobjlist {
+	/** next item in list */
+	struct config_strobjlist* next;
+	/** string */
+	char* str;
+	/** associated object */
+	void* obj;
+};
+
+/**
  * View config options
  */
 struct config_view {
@@ -737,23 +751,17 @@ struct config_view {
 	struct config_view* next;
 	/** view name */
 	char* name;
-	/** local zones */
-	struct config_str2list* local_zones;
-	/** local data RRs */
-	struct config_strlist* local_data;
-	/** local zones nodefault list */
-	struct config_strlist* local_zones_nodefault;
-#ifdef USE_IPSET
-	/** local zones ipset list */
-	struct config_strlist* local_zones_ipset;
-#endif
+	/** Pointer to the global server configuration */
+	struct config_file *cfg_server;
+	/** List of specifcations to match on clients */
+	struct config_strlist* match_clients;
+	/** List of specifcations to match on destination */
+	struct config_strobjlist* match_destinations;
 	/** Fallback to global local_zones when there is no match in the view
 	 * view specific tree. 1 for yes, 0 for no */	
 	int isfirst;
-	/** predefined actions for particular IP address responses */
-	struct config_str2list* respip_actions;
-	/** data complementing the 'redirect' response IP actions */
-	struct config_str2list* respip_data;
+	/** Underlying configuration file */
+	struct config_file cfg_view;
 };
 
 /**
@@ -811,6 +819,24 @@ struct config_strbytelist {
  * @return: the new structure or NULL on memory error.
  */
 struct config_file* config_create(void);
+
+/**
+ * Create a configuration view structure based on the specified configuration.
+ * @return: the new structure or NULL on memory error.
+ */
+struct config_view* config_view_create(struct config_file *svr_cfg);
+
+/**
+ * Validate a configuration view structure.
+ * @return: the new structure or NULL on memory error.
+ */
+int config_finalize(struct config_file *server);
+
+/**
+ * Validate a configuration view structure.
+ * @return: the new structure or NULL on memory error.
+ */
+int config_view_validate(struct config_view *view);
 
 /**
  * Create config file structure for library use. Filled with default values.
@@ -938,6 +964,17 @@ struct config_strlist* cfg_strlist_find(struct config_strlist* head,
 	const char* item);
 
 /**
+ * Insert string/obj pair into strobjlist.
+ * @param head: pointer to strlist head variable.
+ * @param item: new item. malloced by caller. If NULL the insertion fails.
+ * @return: true on success.
+ * on fail, the item is free()d.
+ */
+int cfg_strobjlist_insert(struct config_strobjlist** head,
+                          char* str,
+                          void* obj);
+
+/**
  * Insert string into strlist.
  * @param head: pointer to strlist head variable.
  * @param item: new item. malloced by caller. If NULL the insertion fails.
@@ -992,6 +1029,12 @@ int cfg_strbytelist_insert(struct config_strbytelist** head, char* item,
  * @return: pointer to config_stub if found, or NULL if not found.
  */
 struct config_stub* cfg_stub_find(struct config_stub*** pp, const char* nm);
+
+/**
+ * Delete items in config string/object pair list.
+ * @param list: list.
+ */
+void config_delstrobjlist(struct config_strobjlist* list);
 
 /**
  * Delete items in config string list.
@@ -1263,6 +1306,10 @@ struct config_parser_state {
 	struct config_file* cfg;
 	/** the current chroot dir (or NULL if none) */
 	const char* chroot;
+	/** the server-level configuration */
+	struct config_file* server_cfg;
+	/** the current view clause being parsed */
+	struct config_view* view_cfg;
 };
 
 /** global config parser object used during config parsing */

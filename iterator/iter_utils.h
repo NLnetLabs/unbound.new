@@ -136,7 +136,7 @@ struct dns_msg* dns_copy_msg(struct dns_msg* from, struct regional* regional);
  * 	It is useful to log the alloc failure (for the server operator),
  * 	but the query resolution can continue without cache storage.
  */
-void iter_dns_store(struct module_env* env, struct query_info* qinf,
+void iter_dns_store(struct module_qstate* qstate, struct query_info* qinf,
 	struct reply_info* rep, int is_referral, time_t leeway, int pside,
 	struct regional* region, uint16_t flags);
 
@@ -263,7 +263,7 @@ int caps_failed_rcode(struct reply_info* rep);
  * @param rrset: the rrset to store (copied).
  * Failure to store is logged, but otherwise ignored.
  */
-void iter_store_parentside_rrset(struct module_env* env, 
+void iter_store_parentside_rrset(struct module_qstate* qstate, 
 	struct ub_packed_rrset_key* rrset);
 
 /**
@@ -272,7 +272,7 @@ void iter_store_parentside_rrset(struct module_env* env,
  * @param rep: response with NS rrset.
  * Failure to store is logged, but otherwise ignored.
  */
-void iter_store_parentside_NS(struct module_env* env, struct reply_info* rep);
+void iter_store_parentside_NS(struct module_qstate* qstate, struct reply_info* rep);
 
 /**
  * Store parent-side negative element, the parentside rrset does not exist,
@@ -282,7 +282,7 @@ void iter_store_parentside_NS(struct module_env* env, struct reply_info* rep);
  * @param rep: delegation response or answer response, to glean TTL from.
  * (malloc) failure is logged but otherwise ignored.
  */
-void iter_store_parentside_neg(struct module_env* env, 
+void iter_store_parentside_neg(struct module_qstate* qstate, 
 	struct query_info* qinfo, struct reply_info* rep);
 
 /**
@@ -297,7 +297,7 @@ void iter_store_parentside_neg(struct module_env* env,
  *	if true, the routine worked and if such cached information 
  *	existed dp->has_parent_side_NS is set true.
  */
-int iter_lookup_parent_NS_from_cache(struct module_env* env,
+int iter_lookup_parent_NS_from_cache(struct module_qstate* qstate,
 	struct delegpt* dp, struct regional* region, struct query_info* qinfo);
 
 /**
@@ -311,7 +311,7 @@ int iter_lookup_parent_NS_from_cache(struct module_env* env,
  * @return: true, it worked, no malloc failures, and new addresses (lame)
  *	have been added, giving extra options as query targets.
  */
-int iter_lookup_parent_glue_from_cache(struct module_env* env,
+int iter_lookup_parent_glue_from_cache(struct module_qstate* qstate,
 	struct delegpt* dp, struct regional* region, struct query_info* qinfo);
 
 /**

@@ -779,7 +779,7 @@ remove_spurious_authority(struct reply_info* chase_reply,
  * 	the signer of the answer. The key entry isgood().
  */
 static void
-validate_positive_response(struct module_env* env, struct val_env* ve,
+validate_positive_response(struct module_qstate* qstate, struct val_env* ve,
 	struct query_info* qchase, struct reply_info* chase_reply,
 	struct key_entry_key* kkey)
 {
@@ -805,9 +805,9 @@ validate_positive_response(struct module_env* env, struct val_env* ve,
 			chase_reply->security = sec_status_bogus;
 			return;
 		}
-		if(wc && !wc_cached && env->cfg->aggressive_nsec) {
-			rrset_cache_update_wildcard(env->rrset_cache, s, wc, wl,
-				env->alloc, *env->now);
+		if(wc && !wc_cached && qstate->env->cfg->aggressive_nsec) {
+			rrset_cache_update_wildcard(qstate->query_view_env->rrset_cache, s, wc, wl,
+				qstate->env->alloc, *qstate->env->now);
 			wc_cached = 1;
 		}
 
@@ -841,7 +841,7 @@ validate_positive_response(struct module_env* env, struct val_env* ve,
 	 * proven, and we have NSEC3 records, try to prove it using the NSEC3
 	 * records. */
 	if(wc != NULL && !wc_NSEC_ok && nsec3s_seen) {
-		enum sec_status sec = nsec3_prove_wildcard(env, ve, 
+		enum sec_status sec = nsec3_prove_wildcard(qstate->env, ve, 
 			chase_reply->rrsets+chase_reply->an_numrrsets,
 			chase_reply->ns_numrrsets, qchase, kkey, wc);
 		if(sec == sec_status_insecure) {
@@ -1521,7 +1521,7 @@ processInit(struct module_qstate* qstate, struct val_qstate* vq,
 	}
 
 	val_mark_indeterminate(vq->chase_reply, qstate->env->anchors, 
-		qstate->env->rrset_cache, qstate->env);
+		qstate->query_view_env->rrset_cache, qstate->env);
 	vq->key_entry = NULL;
 	vq->empty_DS_name = NULL;
 	vq->ds_rrset = 0;
@@ -1599,7 +1599,7 @@ processInit(struct module_qstate* qstate, struct val_qstate* vq,
 		if(anchor && anchor->numDS == 0 && anchor->numDNSKEY == 0) {
 			vq->chase_reply->security = sec_status_insecure;
 			val_mark_insecure(vq->chase_reply, anchor->name, 
-				qstate->env->rrset_cache, qstate->env);
+				qstate->query_view_env->rrset_cache, qstate->env);
 			lock_basic_unlock(&anchor->lock);
 			/* go to finished state to cache this result */
 			vq->state = VAL_FINISHED_STATE;
@@ -1627,7 +1627,7 @@ processInit(struct module_qstate* qstate, struct val_qstate* vq,
 		 * essentially proven insecure. */
 		vq->chase_reply->security = sec_status_insecure;
 		val_mark_insecure(vq->chase_reply, vq->key_entry->name, 
-			qstate->env->rrset_cache, qstate->env);
+			qstate->query_view_env->rrset_cache, qstate->env);
 		/* go to finished state to cache this result */
 		vq->state = VAL_FINISHED_STATE;
 		return 1;
@@ -1773,7 +1773,7 @@ processFindKey(struct module_qstate* qstate, struct val_qstate* vq, int id)
 		/* only if cache not blacklisted, of course */
 		struct dns_msg* msg;
 		if(!qstate->blacklist && !vq->chain_blacklist &&
-			(msg=val_find_DS(qstate->env, target_key_name, 
+			(msg=val_find_DS(qstate, target_key_name, 
 			target_key_len, vq->qchase.qclass, qstate->region,
 			vq->key_entry->name)) ) {
 			verbose(VERB_ALGO, "Process cached DS response");
@@ -1837,7 +1837,7 @@ processValidate(struct module_qstate* qstate, struct val_qstate* vq,
 			vq->signer_name?"":"unsigned ");
 		vq->chase_reply->security = sec_status_insecure;
 		val_mark_insecure(vq->chase_reply, vq->key_entry->name, 
-			qstate->env->rrset_cache, qstate->env);
+			qstate->query_view_env->rrset_cache, qstate->env);
 		key_cache_insert(ve->kcache, vq->key_entry, qstate);
 		return 1;
 	}
@@ -1901,7 +1901,7 @@ processValidate(struct module_qstate* qstate, struct val_qstate* vq,
 	switch(subtype) {
 		case VAL_CLASS_POSITIVE:
 			verbose(VERB_ALGO, "Validating a positive response");
-			validate_positive_response(qstate->env, ve,
+			validate_positive_response(qstate, ve,
 				&vq->qchase, vq->chase_reply, vq->key_entry);
 			verbose(VERB_DETAIL, "validate(positive): %s",
 			  	sec_status_to_string(
@@ -2142,7 +2142,7 @@ processFinished(struct module_qstate* qstate, struct val_qstate* vq,
 		/* if secure, this will override cache anyway, no need
 		 * to check if from parentNS */
 		if(!qstate->no_cache_store) {
-			if(!dns_cache_store(qstate->env, &vq->orig_msg->qinfo,
+			if(!dns_cache_store(qstate, &vq->orig_msg->qinfo,
 				vq->orig_msg->rep, 0, qstate->prefetch_leeway, 0, NULL,
 				qstate->query_flags)) {
 				log_err("out of memory caching validator results");
@@ -2151,7 +2151,7 @@ processFinished(struct module_qstate* qstate, struct val_qstate* vq,
 	} else {
 		/* for a referral, store the verified RRsets */
 		/* and this does not get prefetched, so no leeway */
-		if(!dns_cache_store(qstate->env, &vq->orig_msg->qinfo,
+		if(!dns_cache_store(qstate, &vq->orig_msg->qinfo,
 			vq->orig_msg->rep, 1, 0, 0, NULL,
 			qstate->query_flags)) {
 			log_err("out of memory caching validator results");

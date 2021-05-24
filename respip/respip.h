@@ -69,7 +69,6 @@ struct respip_client_info {
 	struct config_strlist** tag_datas;
 	size_t tag_datas_size;
 	struct view* view;
-	struct respip_set* respip_set;
 };
 
 /**
@@ -117,13 +116,11 @@ int respip_global_apply_cfg(struct respip_set* set, struct config_file* cfg);
 /**
  * Apply response-ip config settings in named views.
  * @param vs: view structures with processed config data
- * @param cfg: config data.
  * @param have_view_respip_cfg: set to true if any named view has respip
  * 	configuration; otherwise set to false
  * @return 1 on success, 0 on error.
  */
-int respip_views_apply_cfg(struct views* vs, struct config_file* cfg,
-	int* have_view_respip_cfg);
+int respip_views_apply_cfg(struct views* vs, int* have_view_respip_cfg);
 
 /**
  * Merge two replies to build a complete CNAME chain.

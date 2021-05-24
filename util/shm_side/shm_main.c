@@ -251,8 +251,8 @@ void shm_main_run(struct worker *worker)
 		stat_timeval_subtract(&shm_stat->time.up_sec, &shm_stat->time.up_usec, worker->env.now_tv, &worker->daemon->time_boot);
 		stat_timeval_subtract(&shm_stat->time.elapsed_sec, &shm_stat->time.elapsed_usec, worker->env.now_tv, &worker->daemon->time_last_stat);
 
-		shm_stat->mem.msg = (long long)slabhash_get_mem(worker->env.msg_cache);
-		shm_stat->mem.rrset = (long long)slabhash_get_mem(&worker->env.rrset_cache->table);
+		shm_stat->mem.msg = (long long)slabhash_get_mem(worker->env.current_view_env->msg_cache);
+		shm_stat->mem.rrset = (long long)slabhash_get_mem(&worker->env.current_view_env->rrset_cache->table);
 		shm_stat->mem.dnscrypt_shared_secret = 0;
 #ifdef USE_DNSCRYPT
 		if(worker->daemon->dnscenv) {

@@ -210,32 +210,41 @@ struct name_tree_node* name_tree_lookup(rbtree_type* tree, uint8_t* name,
 struct addr_tree_node* addr_tree_lookup(rbtree_type* tree, 
         struct sockaddr_storage* addr, socklen_t addrlen)
 {
-        rbnode_type* res = NULL;
-        struct addr_tree_node* result;
-        struct addr_tree_node key;
-        key.node.key = &key;
-        memcpy(&key.addr, addr, addrlen);
-        key.addrlen = addrlen;
-        key.net = (addr_is_ip6(addr, addrlen)?128:32);
-        if(rbtree_find_less_equal(tree, &key, &res)) {
-                /* exact */
-                return (struct addr_tree_node*)res;
-        } else {
-                /* smaller element (or no element) */
-                int m;
-                result = (struct addr_tree_node*)res;
-                if(!result || result->addrlen != addrlen)
-                        return 0;
-                /* count number of bits matched */
-                m = addr_in_common(&result->addr, result->net, addr,
-                        key.net, addrlen);
-                while(result) { /* go up until addr is inside netblock */
-                        if(result->net <= m)
-                                break;
-                        result = result->parent;
-                }
-        }
-        return result;
+	rbnode_type* res = NULL;
+	struct addr_tree_node* result;
+	struct addr_tree_node key;
+
+	key.node.key = &key;
+	memcpy(&key.addr, addr, addrlen);
+	key.addrlen = addrlen;
+	key.net = (addr_is_ip6(addr, addrlen)?128:32);
+
+	if (rbtree_find_less_equal(tree, &key, &res)) {
+		result = (struct addr_tree_node *) res;
+	} else if ((result = (struct addr_tree_node *) res) == NULL ||
+	            result->addrlen != addrlen) {
+		result = NULL;
+	} else {
+		int m;
+
+		/* count number of bits matched */
+
+		m = addr_in_common(&result->addr,
+		                   result->net,
+		                   addr,
+		                   key.net,
+		                   addrlen);
+
+		do {
+			/* go up until addr is inside netblock */
+
+			if (result->net <= m) {
+				break;
+			}
+		} while ((result = result->parent) != NULL);
+	}
+
+	return result;
 }
 
 struct addr_tree_node* addr_tree_find(rbtree_type* tree,

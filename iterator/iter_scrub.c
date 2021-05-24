@@ -44,6 +44,7 @@
 #include "iterator/iterator.h"
 #include "iterator/iter_priv.h"
 #include "services/cache/rrset.h"
+#include "services/view.h"
 #include "util/log.h"
 #include "util/net_help.h"
 #include "util/regional.h"
@@ -614,20 +615,20 @@ scrub_normalize(sldns_buffer* pkt, struct msg_parse* msg,
  * @param rrset: to store.
  */
 static void
-store_rrset(sldns_buffer* pkt, struct msg_parse* msg, struct module_env* env,
+store_rrset(sldns_buffer* pkt, struct msg_parse* msg, struct module_qstate* qstate,
 	struct rrset_parse* rrset)
 {
 	struct ub_packed_rrset_key* k;
 	struct packed_rrset_data* d;
 	struct rrset_ref ref;
-	time_t now = *env->now;
+	time_t now = *qstate->env->now;
 
-	k = alloc_special_obtain(env->alloc);
+	k = alloc_special_obtain(qstate->env->alloc);
 	if(!k)
 		return;
 	k->entry.data = NULL;
 	if(!parse_copy_decompress_rrset(pkt, msg, rrset, NULL, k)) {
-		alloc_special_release(env->alloc, k);
+		alloc_special_release(qstate->env->alloc, k);
 		return;
 	}
 	d = (struct packed_rrset_data*)k->entry.data;
@@ -635,7 +636,7 @@ store_rrset(sldns_buffer* pkt, struct msg_parse* msg, struct module_env* env,
 	ref.key = k;
 	ref.id = k->id;
 	/*ignore ret: it was in the cache, ref updated */
-	(void)rrset_cache_update(env->rrset_cache, &ref, env->alloc, now);
+	(void)rrset_cache_update(qstate->query_view_env->rrset_cache, &ref, qstate->env->alloc, now);
 }
 
 /**
@@ -683,7 +684,7 @@ static int sanitize_nsec_is_overreach(struct rrset_parse* rrset,
  */
 static int
 scrub_sanitize(sldns_buffer* pkt, struct msg_parse* msg, 
-	struct query_info* qinfo, uint8_t* zonename, struct module_env* env,
+	struct query_info* qinfo, uint8_t* zonename, struct module_qstate* qstate,
 	struct iter_env* ie)
 {
 	int del_addi = 0; /* if additional-holding rrsets are deleted, we
@@ -767,13 +768,13 @@ scrub_sanitize(sldns_buffer* pkt, struct msg_parse* msg,
 				 * (we dont want its glue that was approved
 				 * during the normalize action) */
 				del_addi = 1;
-			} else if(!env->cfg->harden_glue && (
+			} else if(!qstate->env->cfg->harden_glue && (
 				rrset->type == LDNS_RR_TYPE_A ||
 				rrset->type == LDNS_RR_TYPE_AAAA)) {
 				/* store in cache! Since it is relevant
 				 * (from normalize) it will be picked up 
 				 * from the cache to be used later */
-				store_rrset(pkt, msg, env, rrset);
+				store_rrset(pkt, msg, qstate, rrset);
 				remove_rrset("sanitize: storing potential "
 				"poison RRset:", pkt, msg, prev, &rrset);
 				continue;
@@ -805,7 +806,7 @@ scrub_sanitize(sldns_buffer* pkt, struct msg_parse* msg,
 int 
 scrub_message(sldns_buffer* pkt, struct msg_parse* msg, 
 	struct query_info* qinfo, uint8_t* zonename, struct regional* region,
-	struct module_env* env, struct iter_env* ie)
+	struct module_qstate* qstate, struct iter_env* ie)
 {
 	/* basic sanity checks */
 	log_nametypeclass(VERB_ALGO, "scrub for", zonename, LDNS_RR_TYPE_NS, 
@@ -837,7 +838,7 @@ scrub_message(sldns_buffer* pkt, struct msg_parse* msg,
 	if(!scrub_normalize(pkt, msg, qinfo, region))
 		return 0;
 	/* delete all out-of-zone information */
-	if(!scrub_sanitize(pkt, msg, qinfo, zonename, env, ie))
+	if(!scrub_sanitize(pkt, msg, qinfo, zonename, qstate, ie))
 		return 0;
 	return 1;
 }

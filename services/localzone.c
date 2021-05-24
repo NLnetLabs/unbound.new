@@ -1733,12 +1733,14 @@ local_data_find_tag_action(const uint8_t* taglist, size_t taglen,
 }
 
 int 
-local_zones_answer(struct local_zones* zones, struct module_env* env,
-	struct query_info* qinfo, struct edns_data* edns, sldns_buffer* buf,
-	struct regional* temp, struct comm_reply* repinfo, uint8_t* taglist,
-	size_t taglen, uint8_t* tagactions, size_t tagactionssize,
-	struct config_strlist** tag_datas, size_t tag_datas_size,
-	char** tagname, int num_tags, struct view* view)
+local_zones_answer(struct view* view, struct module_env* env,
+                   struct query_info* qinfo, struct edns_data* edns,
+                   sldns_buffer* buf, struct regional* temp,
+                   struct comm_reply* repinfo,
+                   uint8_t* taglist, size_t taglen,
+                   uint8_t* tagactions, size_t tagactionssize,
+                   struct config_strlist** tag_datas, size_t tag_datas_size,
+                   char** tagname, int num_tags)
 {
 	/* see if query is covered by a zone,
 	 * 	if so:	- try to match (exact) local data 
@@ -1747,60 +1749,87 @@ local_zones_answer(struct local_zones* zones, struct module_env* env,
 	struct local_data* ld = NULL;
 	struct local_zone* z = NULL;
 	enum localzone_type lzt = local_zone_transparent;
-	int r, tag = -1;
 
-	if(view) {
-		lock_rw_rdlock(&view->lock);
-		if(view->local_zones &&
-			(z = local_zones_lookup(view->local_zones,
-			qinfo->qname, qinfo->qname_len, labs,
-			qinfo->qclass, qinfo->qtype))) {
-			lock_rw_rdlock(&z->lock);
-			lzt = z->type;
+	lock_rw_rdlock(&view->lock);
+
+	struct local_zones *zones;
+
+	if (view->server_view == view) {
+		// The server will always have local zones (even if empty)
+		zones = view->local_zones;
+	} else {
+		// Regular views are looked up without tags
+
+		if ((zones = view->local_zones) != NULL) {
+			if((z = local_zones_lookup(zones,
+			                           qinfo->qname, qinfo->qname_len, labs,
+			                           qinfo->qclass, qinfo->qtype))) {
+				lock_rw_rdlock(&z->lock);
+				lzt = z->type;
+	
+				if(lzt == local_zone_noview) {
+					lock_rw_unlock(&z->lock);
+					z = NULL;
+				} else if((lzt == local_zone_transparent ||
+				           lzt == local_zone_typetransparent ||
+				           lzt == local_zone_inform ||
+				           lzt == local_zone_always_transparent) &&
+				               local_zone_does_not_cover(z, qinfo, labs)) {
+					lock_rw_unlock(&z->lock);
+					z = NULL;
+				} else if (verbosity >= VERB_ALGO) {
+					char zname[255+1];
+					dname_str(z->name, zname);
+					verbose(VERB_ALGO, "using localzone %s %s from view %s", 
+					                   zname,
+					                   local_zone_type2str(lzt),
+					                   view->name);
+				}
+			}
 		}
-		if(lzt == local_zone_noview) {
-			lock_rw_unlock(&z->lock);
-			z = NULL;
-		}
-		if(z && (lzt == local_zone_transparent ||
-			lzt == local_zone_typetransparent ||
-			lzt == local_zone_inform ||
-			lzt == local_zone_always_transparent) &&
-			local_zone_does_not_cover(z, qinfo, labs)) {
-			lock_rw_unlock(&z->lock);
-			z = NULL;
-		}
-		if(view->local_zones && !z && !view->isfirst){
+		if (z == NULL && (zones = view->server_zones) == NULL) {
+			// This happens if there's a view and it doesn't fall back to
+			// the server's local zones - outta here!
+
 			lock_rw_unlock(&view->lock);
-			return 0;
+			return (0);
 		}
-		if(z && verbosity >= VERB_ALGO) {
-			char zname[255+1];
-			dname_str(z->name, zname);
-			verbose(VERB_ALGO, "using localzone %s %s from view %s", 
-				zname, local_zone_type2str(lzt), view->name);
-		}
-		lock_rw_unlock(&view->lock);
 	}
+
+	lock_rw_unlock(&view->lock);
+
+	int tag = -1;
+
 	if(!z) {
+		log_assert(zones);
+
 		/* try global local_zones tree */
 		lock_rw_rdlock(&zones->lock);
-		if(!(z = local_zones_tags_lookup(zones, qinfo->qname,
-			qinfo->qname_len, labs, qinfo->qclass, qinfo->qtype,
-			taglist, taglen, 0))) {
+		if(!(z = local_zones_tags_lookup(zones,
+		                                 qinfo->qname, qinfo->qname_len, labs,
+		                                 qinfo->qclass, qinfo->qtype,
+		                                 taglist, taglen,
+		                                 0))) {
 			lock_rw_unlock(&zones->lock);
 			return 0;
 		}
 		lock_rw_rdlock(&z->lock);
-		lzt = lz_type(taglist, taglen, z->taglist, z->taglen,
-			tagactions, tagactionssize, z->type, repinfo,
-			z->override_tree, &tag, tagname, num_tags);
+		lzt = lz_type(taglist, taglen,
+		              z->taglist, z->taglen,
+		              tagactions, tagactionssize,
+		              z->type,
+		              repinfo,
+		              z->override_tree,
+		              &tag,
+		              tagname,
+		              num_tags);
 		lock_rw_unlock(&zones->lock);
+
 		if(z && verbosity >= VERB_ALGO) {
 			char zname[255+1];
 			dname_str(z->name, zname);
 			verbose(VERB_ALGO, "using localzone %s %s", zname,
-				local_zone_type2str(lzt));
+			                   local_zone_type2str(lzt));
 		}
 	}
 	if((env->cfg->log_local_actions ||
@@ -1822,6 +1851,9 @@ local_zones_answer(struct local_zones* zones, struct module_env* env,
 		 * a local alias. */
 		return !qinfo->local_alias;
 	}
+
+	int r;
+
 	r = local_zones_zone_answer(z, env, qinfo, edns, repinfo, buf, temp, ld, lzt);
 	lock_rw_unlock(&z->lock);
 	return r && !qinfo->local_alias; /* see above */

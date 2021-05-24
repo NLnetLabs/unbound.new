@@ -42,180 +42,350 @@
 #include "config.h"
 #include "services/view.h"
 #include "services/localzone.h"
+#include "services/cache/dns.h"
+#include "services/cache/rrset.h"
+#include "iterator/iter_fwd.h"
+#include "iterator/iter_hints.h"
 #include "util/config_file.h"
+#include "daemon/daemon.h"
 
 int 
 view_cmp(const void* v1, const void* v2)
 {
-	struct view* a = (struct view*)v1;
-	struct view* b = (struct view*)v2;
-	
-	return strcmp(a->name, b->name);
+	return strcmp(v1, v2);
 }
 
 struct views* 
 views_create(void)
 {
-	struct views* v = (struct views*)calloc(1, 
-		sizeof(*v));
-	if(!v)
-		return NULL;
-	rbtree_init(&v->vtree, &view_cmp);
-	lock_rw_init(&v->lock);
-	lock_protect(&v->lock, &v->vtree, sizeof(v->vtree));
-	return v;
+	struct views *vs;
+
+	if ((vs = calloc(1, sizeof(*vs))) != NULL) {
+		rbtree_init(&vs->vtree, view_cmp);
+		lock_rw_init(&vs->lock);
+		lock_protect(&vs->lock, &vs->vtree, sizeof(vs->vtree));
+	}
+
+	return vs;
 }
 
 /** This prototype is defined in in respip.h, but we want to avoid
   * unnecessary dependencies */
-void respip_set_delete(struct respip_set *set);
 
-void 
-view_delete(struct view* v)
+extern void respip_set_delete(struct respip_set *set);
+
+static void
+view_cleanup(struct view *v)
 {
-	if(!v)
-		return;
 	lock_rw_destroy(&v->lock);
 	local_zones_delete(v->local_zones);
 	respip_set_delete(v->respip_set);
+
+	if ((v->view_flags & VIEW_FLAG_SHARE_FWDS) == 0) {
+		forwards_delete(v->fwds);
+	}
+	if ((v->view_flags & VIEW_FLAG_SHARE_HINTS) == 0) {
+		hints_delete(v->hints);
+	}
+	if ((v->view_flags & VIEW_FLAG_SHARE_CACHE) == 0) {
+		rrset_cache_delete(v->rrset_cache);
+		slabhash_delete(v->msg_cache);
+	}
+
 	free(v->name);
-	free(v);
+}
+
+static void
+view_node_delete(struct view_node *vn)
+{
+	if (vn != NULL) {
+		view_cleanup(&vn->vinfo);
+		free(vn);
+	}
 }
 
 static void
 delviewnode(rbnode_type* n, void* ATTR_UNUSED(arg))
 {
-	struct view* v = (struct view*)n;
-	view_delete(v);
+	view_node_delete((struct view_node *) n);
 }
 
 void 
-views_delete(struct views* v)
+views_delete(struct views* vs)
 {
-	if(!v)
-		return;
-	lock_rw_destroy(&v->lock);
-	traverse_postorder(&v->vtree, delviewnode, NULL);
-	free(v);
+	if (vs != NULL) {
+		// TODO: Clean up the default view once all the other references
+		//       to the data elements are removed from the code
+		//
+		// view_cleanup(&vs->server_view);
+		lock_rw_destroy(&vs->lock);
+		traverse_postorder(&vs->vtree, delviewnode, NULL);
+		free(vs->server_view.view_stats);
+		free(vs);
+	}
 }
 
 /** create a new view */
-static struct view*
-view_create(char* name)
+static struct view_node *
+view_node_create(char* name, unsigned int threads)
 {
-	struct view* v = (struct view*)calloc(1, sizeof(*v));
-	if(!v)
-		return NULL;
-	v->node.key = v;
-	if(!(v->name = strdup(name))) {
-		free(v);
-		return NULL;
+	size_t vsize = sizeof(struct view_node) +
+	                   threads * sizeof(struct view_stats);
+	struct view_node *vn;
+
+	if ((vn = calloc(1, vsize)) != NULL) {
+		struct view *v = &vn->vinfo;
+
+		if ((v->name = strdup(name)) != NULL) {
+			vn->node.key = v->name;
+			vn->vinfo.view_threads = threads;
+			vn->vinfo.view_stats = (struct view_stats *)(vn + 1);
+			lock_rw_init(&v->lock);
+			lock_protect(&v->lock, v, sizeof(*v));
+		} else {
+			free(vn);
+			vn = NULL;
+		}
 	}
-	lock_rw_init(&v->lock);
-	lock_protect(&v->lock, &v->name, sizeof(*v)-sizeof(rbnode_type));
-	return v;
+
+	return vn;
 }
 
 /** enter a new view returns with WRlock */
-static struct view*
-views_enter_view_name(struct views* vs, char* name)
+static struct view *
+views_enter_view_name(struct views *vs, char *name, unsigned int threads)
 {
-	struct view* v = view_create(name);
-	if(!v) {
+	struct view_node *vn;
+	struct view *v;
+
+	if ((vn = view_node_create(name, threads)) != NULL) {
+		/* add to rbtree */
+		lock_rw_wrlock(&vs->lock);
+		lock_rw_wrlock(&vn->vinfo.lock);
+
+		if (rbtree_insert(&vs->vtree, &vn->node) != NULL) {
+			v = &vn->vinfo;
+		} else {
+			log_warn("duplicate view: %s", name);
+			lock_rw_unlock(&vn->vinfo.lock);
+			view_node_delete(vn);
+			v = NULL;
+		}
+
+		lock_rw_unlock(&vs->lock);
+	} else {
 		log_err("out of memory");
-		return NULL;
+		v = NULL;
 	}
 
-	/* add to rbtree */
-	lock_rw_wrlock(&vs->lock);
-	lock_rw_wrlock(&v->lock);
-	if(!rbtree_insert(&vs->vtree, &v->node)) {
-		log_warn("duplicate view: %s", name);
-		lock_rw_unlock(&v->lock);
-		view_delete(v);
-		lock_rw_unlock(&vs->lock);
-		return NULL;
-	}
-	lock_rw_unlock(&vs->lock);
 	return v;
 }
 
-int 
-views_apply_cfg(struct views* vs, struct config_file* cfg)
+static int
+view_apply_localzones(struct view *v, struct config_file *cfg, int server)
 {
-	struct config_view* cv;
-	struct view* v;
-	struct config_file lz_cfg;
-	/* Check existence of name in first view (last in config). Rest of
-	 * views are already checked when parsing config. */
-	if(cfg->views && !cfg->views->name) {
-		log_err("view without a name");
+	if (!server && cfg->local_zones == NULL && cfg->local_data == NULL ) {
+		return 1;
+	}
+	if ((v->local_zones = local_zones_create()) == NULL){
+		lock_rw_unlock(&v->lock);
 		return 0;
 	}
-	for(cv = cfg->views; cv; cv = cv->next) {
-		/* create and enter view */
-		if(!(v = views_enter_view_name(vs, cv->name)))
-			return 0;
-		v->isfirst = cv->isfirst;
-		if(cv->local_zones || cv->local_data) {
-			if(!(v->local_zones = local_zones_create())){
+	if (!server && v->server_view != NULL) {
+		struct config_strlist *nd;
+
+		// Add nodefault zones to list of zones to add, so they will be
+		// used as if they are configured as type transparent
+
+		for (nd = cfg->local_zones_nodefault; nd != NULL; nd = nd->next) {
+			char *nd_str, *nd_type;
+
+			if ((nd_str = strdup(nd->str)) == NULL) {
+				log_err("out of memory");
 				lock_rw_unlock(&v->lock);
 				return 0;
 			}
-			memset(&lz_cfg, 0, sizeof(lz_cfg));
-			lz_cfg.local_zones = cv->local_zones;
-			lz_cfg.local_data = cv->local_data;
-			lz_cfg.local_zones_nodefault =
-				cv->local_zones_nodefault;
-			if(v->isfirst) {
-				/* Do not add defaults to view-specific
-				 * local-zone when global local zone will be
-				 * used. */
-				struct config_strlist* nd;
-				lz_cfg.local_zones_disable_default = 1;
-				/* Add nodefault zones to list of zones to add,
-				 * so they will be used as if they are
-				 * configured as type transparent */
-				for(nd = cv->local_zones_nodefault; nd;
-					nd = nd->next) {
-					char* nd_str, *nd_type;
-					nd_str = strdup(nd->str);
-					if(!nd_str) {
-						log_err("out of memory");
-						lock_rw_unlock(&v->lock);
-						return 0;
-					}
-					nd_type = strdup("nodefault");
-					if(!nd_type) {
-						log_err("out of memory");
-						free(nd_str);
-						lock_rw_unlock(&v->lock);
-						return 0;
-					}
-					if(!cfg_str2list_insert(
-						&lz_cfg.local_zones, nd_str,
-						nd_type)) {
-						log_err("failed to insert "
-							"default zones into "
-							"local-zone list");
-						lock_rw_unlock(&v->lock);
-						return 0;
-					}
-				}
-			}
-			if(!local_zones_apply_cfg(v->local_zones, &lz_cfg)){
+			if ((nd_type = strdup("nodefault")) == NULL) {
+				log_err("out of memory");
+				free(nd_str);
 				lock_rw_unlock(&v->lock);
 				return 0;
 			}
-			/* local_zones, local_zones_nodefault and local_data 
-			 * are free'd from config_view by local_zones_apply_cfg.
-			 * Set pointers to NULL. */
-			cv->local_zones = NULL;
-			cv->local_data = NULL;
-			cv->local_zones_nodefault = NULL;
+			if (!cfg_str2list_insert(&cfg->local_zones,
+			                         nd_str,
+			                         nd_type)) {
+				log_err("failed to insert default zones into local-zone list");
+				lock_rw_unlock(&v->lock);
+				return 0;
+			}
 		}
+	}
+	if (!local_zones_apply_cfg(v->local_zones, cfg)){
+		lock_rw_unlock(&v->lock);
+		return 0;
+	}
+
+	// local_zones, local_zones_nodefault and local_data 
+	// are free'd from config_view by local_zones_apply_cfg.
+	// Set pointers to NULL.
+
+	cfg->local_zones = NULL;
+	cfg->local_data = NULL;
+	cfg->local_zones_nodefault = NULL;
+
+	return 1;
+}
+
+static int
+view_apply_cfg(struct view *v,
+               struct config_file *cfg,
+               struct alloc_cache *alloc)
+{
+	int server = (v->server_view == v);
+
+	if (!view_apply_localzones(v, cfg, server)) {
+		return 0;
+	}
+	if (alloc != NULL && cfg->msg_cache_size != 0) {
+		if ((v->rrset_cache = rrset_cache_create(cfg, alloc)) == NULL) {
+			log_err("failed to create rrset cache for %s view",
+			        server ? "server" : v->name);
+			return (0);
+		}
+		if ((v->msg_cache = msg_cache_adjust(NULL, cfg)) == NULL) {
+			log_err("failed to create message cache for %s view",
+			        server ? "server" : v->name);
+			return (0);
+		}
+	} else if (!server && alloc != NULL) {
+		v->rrset_cache = v->server_view->rrset_cache;
+		v->msg_cache   = v->server_view->msg_cache;
+		v->view_flags |= VIEW_FLAG_SHARE_CACHE;
+	}
+
+	// For hints and forwards, leave the pointer(s) NULL. The resolution
+	// set-up will set up the right values.
+
+	if (server || cfg->forwards != NULL) {
+		if ((v->fwds = forwards_create()) == NULL) {
+			log_err("Could not create forward zones");
+			return (0);
+		}
+		if (!forwards_apply_cfg(v->fwds, cfg)) {
+			log_err("Could not set forward zones");
+			return (0);
+		}
+	} else {
+		v->fwds = v->server_view->fwds;
+		v->view_flags |= VIEW_FLAG_SHARE_FWDS;
+	}
+	if (server || cfg->stubs != NULL || cfg->root_hints != NULL) {
+		// N.B. Depending on what's specified, the view will get:
+		//      Stub Root Semantics
+		//      Y    Y    Both will be configured
+		//      Y    N    Default root hints, unless '.' stub configured
+		//      N    Y    Root hints only
+
+		if ((v->hints = hints_create()) == NULL) {
+			log_err("Could not create root or stub hints");
+			return (0);
+		}
+		if (!hints_apply_cfg(v->hints, cfg)) {
+			log_err("Could not set root or stub hints");
+			return (0);
+		}
+	} else {
+		v->hints = v->server_view->hints;
+		v->view_flags |= VIEW_FLAG_SHARE_HINTS;
+	}
+
+	// TODO: instantiate other view-specific data
+
+	return (1);
+}
+
+int
+views_configure(struct views *vs,
+                struct config_file *cfg,
+                struct alloc_cache *alloc)
+{
+	struct view* v = &vs->server_view;
+	struct view_stats *vstat;
+	struct config_view* cv;
+
+	// Allocate the stats for the server view separately
+
+	if ((vstat = calloc(cfg->num_threads, sizeof(*vstat))) == NULL) {
+		return (0);
+	}
+
+	// Construct the server view by hand, including locking
+
+	lock_rw_init(&v->lock);
+	lock_protect(&v->lock, v, sizeof(*v));
+	lock_rw_wrlock(&v->lock);
+
+	// Mark this view as the server view by pointing to ourselves.
+
+	v->server_view  = v;
+	v->view_cfg     = cfg;
+	v->view_threads = cfg->num_threads;
+	v->view_stats   = vstat;
+
+	if (!view_apply_cfg(&vs->server_view, cfg, alloc)) {
+		return (0);
+	}
+
+	lock_rw_unlock(&v->lock);
+
+	for (cv = cfg->views; cv != NULL; cv = cv->next) {
+		/* create and configure view */
+
+		if ((v = views_enter_view_name(vs,
+		                               cv->name,
+		                               cfg->num_threads)) == NULL) {
+			return (0);
+		}
+
+		v->view_cfg     = &cv->cfg_view;
+		v->view_threads = cfg->num_threads;
+		v->server_view  = &vs->server_view;
+
+		if (!view_apply_cfg(v, &cv->cfg_view, alloc)) {
+			return 0;
+		}
+		if (cv->isfirst || v->local_zones == NULL) {
+			v->server_zones = vs->server_view.local_zones;
+		}
+
 		lock_rw_unlock(&v->lock);
 	}
+
+	return 1;
+}
+
+int
+views_apply_cfg(struct views* vs, struct config_file* cfg)
+{
+	// Legacy interface for unbound-checkconf, et al. Doesn't allocate
+	// caches
+
+	return (views_configure(vs, cfg, NULL));
+}
+
+int
+daemon_views(struct daemon *daemon)
+{
+	if(!(daemon->views = views_create())) {
+		fatal_exit("Could not create views: out of memory");
+	}
+	if (!views_configure(daemon->views, daemon->cfg, &daemon->superalloc)) {
+        fatal_exit("Could not set up views");
+	}
+
+	daemon->env->current_view_env = &daemon->views->server_view;
+	daemon->env->msg_cache = daemon->views->server_view.msg_cache;
+	daemon->env->rrset_cache = daemon->views->server_view.rrset_cache;
 	return 1;
 }
 
@@ -223,26 +393,26 @@ views_apply_cfg(struct views* vs, struct config_file* cfg)
 struct view*
 views_find_view(struct views* vs, const char* name, int write)
 {
-	struct view* v;
-	struct view key;
-	key.node.key = &v;
-	key.name = (char *)name;
-	lock_rw_rdlock(&vs->lock);
-	if(!(v = (struct view*)rbtree_search(&vs->vtree, &key.node))) {
-		lock_rw_unlock(&vs->lock);
-		return 0;
-	}
-	if(write) {
-		lock_rw_wrlock(&v->lock);
-	} else {
-		lock_rw_rdlock(&v->lock);
-	}
-	lock_rw_unlock(&vs->lock);
-	return v;
-}
+	struct view_node *vn;
+	struct view *v;
 
-void views_print(struct views* v)
-{
-	/* TODO implement print */
-	(void)v;
+	lock_rw_rdlock(&vs->lock);
+
+	vn = (struct view_node *) rbtree_search(&vs->vtree, name);
+
+	if (vn == NULL) {
+		v = NULL;
+	} else {
+		v = &vn->vinfo;
+
+		if (write) {
+			lock_rw_wrlock(&v->lock);
+		} else {
+			lock_rw_rdlock(&v->lock);
+		}
+	}
+
+	lock_rw_unlock(&vs->lock);
+
+	return v;
 }

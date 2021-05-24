@@ -651,11 +651,11 @@ dns_copy_msg(struct dns_msg* from, struct regional* region)
 }
 
 void 
-iter_dns_store(struct module_env* env, struct query_info* msgqinf,
+iter_dns_store(struct module_qstate* qstate, struct query_info* msgqinf,
 	struct reply_info* msgrep, int is_referral, time_t leeway, int pside,
 	struct regional* region, uint16_t flags)
 {
-	if(!dns_cache_store(env, msgqinf, msgrep, is_referral, leeway,
+	if(!dns_cache_store(qstate, msgqinf, msgrep, is_referral, leeway,
 		pside, region, flags))
 		log_err("out of memory: cannot store data in cache");
 }
@@ -1064,11 +1064,11 @@ int caps_failed_rcode(struct reply_info* rep)
 }
 
 void 
-iter_store_parentside_rrset(struct module_env* env, 
+iter_store_parentside_rrset(struct module_qstate* qstate, 
 	struct ub_packed_rrset_key* rrset)
 {
 	struct rrset_ref ref;
-	rrset = packed_rrset_copy_alloc(rrset, env->alloc, *env->now);
+	rrset = packed_rrset_copy_alloc(rrset, qstate->env->alloc, *qstate->env->now);
 	if(!rrset) {
 		log_err("malloc failure in store_parentside_rrset");
 		return;
@@ -1078,7 +1078,7 @@ iter_store_parentside_rrset(struct module_env* env,
 	ref.key = rrset;
 	ref.id = rrset->id;
 	/* ignore ret: if it was in the cache, ref updated */
-	(void)rrset_cache_update(env->rrset_cache, &ref, env->alloc, *env->now);
+	(void)rrset_cache_update(qstate->query_view_env->rrset_cache, &ref, qstate->env->alloc, *qstate->env->now);
 }
 
 /** fetch NS record from reply, if any */
@@ -1095,16 +1095,16 @@ reply_get_NS_rrset(struct reply_info* rep)
 }
 
 void
-iter_store_parentside_NS(struct module_env* env, struct reply_info* rep)
+iter_store_parentside_NS(struct module_qstate* qstate, struct reply_info* rep)
 {
 	struct ub_packed_rrset_key* rrset = reply_get_NS_rrset(rep);
 	if(rrset) {
 		log_rrset_key(VERB_ALGO, "store parent-side NS", rrset);
-		iter_store_parentside_rrset(env, rrset);
+		iter_store_parentside_rrset(qstate, rrset);
 	}
 }
 
-void iter_store_parentside_neg(struct module_env* env, 
+void iter_store_parentside_neg(struct module_qstate* qstate, 
         struct query_info* qinfo, struct reply_info* rep)
 {
 	/* TTL: NS from referral in iq->deleg_msg,
@@ -1119,7 +1119,7 @@ void iter_store_parentside_neg(struct module_env* env,
 		if(rrset) ttl = ub_packed_rrset_ttl(rrset);
 	}
 	/* create empty rrset to store */
-	neg = (struct ub_packed_rrset_key*)regional_alloc(env->scratch,
+	neg = (struct ub_packed_rrset_key*)regional_alloc(qstate->env->scratch,
 	                sizeof(struct ub_packed_rrset_key));
 	if(!neg) {
 		log_err("out of memory in store_parentside_neg");
@@ -1130,7 +1130,7 @@ void iter_store_parentside_neg(struct module_env* env,
 	neg->rk.type = htons(qinfo->qtype);
 	neg->rk.rrset_class = htons(qinfo->qclass);
 	neg->rk.flags = 0;
-	neg->rk.dname = regional_alloc_init(env->scratch, qinfo->qname, 
+	neg->rk.dname = regional_alloc_init(qstate->env->scratch, qinfo->qname, 
 		qinfo->qname_len);
 	if(!neg->rk.dname) {
 		log_err("out of memory in store_parentside_neg");
@@ -1138,7 +1138,7 @@ void iter_store_parentside_neg(struct module_env* env,
 	}
 	neg->rk.dname_len = qinfo->qname_len;
 	neg->entry.hash = rrset_key_hash(&neg->rk);
-	newd = (struct packed_rrset_data*)regional_alloc_zero(env->scratch, 
+	newd = (struct packed_rrset_data*)regional_alloc_zero(qstate->env->scratch, 
 		sizeof(struct packed_rrset_data) + sizeof(size_t) +
 		sizeof(uint8_t*) + sizeof(time_t) + sizeof(uint16_t));
 	if(!newd) {
@@ -1160,17 +1160,17 @@ void iter_store_parentside_neg(struct module_env* env,
 	sldns_write_uint16(newd->rr_data[0], 0 /* zero len rdata */);
 	/* store it */
 	log_rrset_key(VERB_ALGO, "store parent-side negative", neg);
-	iter_store_parentside_rrset(env, neg);
+	iter_store_parentside_rrset(qstate, neg);
 }
 
 int 
-iter_lookup_parent_NS_from_cache(struct module_env* env, struct delegpt* dp,
+iter_lookup_parent_NS_from_cache(struct module_qstate* qstate, struct delegpt* dp,
 	struct regional* region, struct query_info* qinfo)
 {
 	struct ub_packed_rrset_key* akey;
-	akey = rrset_cache_lookup(env->rrset_cache, dp->name, 
+	akey = rrset_cache_lookup(qstate->query_view_env->rrset_cache, dp->name, 
 		dp->namelen, LDNS_RR_TYPE_NS, qinfo->qclass, 
-		PACKED_RRSET_PARENT_SIDE, *env->now, 0);
+		PACKED_RRSET_PARENT_SIDE, *qstate->env->now, 0);
 	if(akey) {
 		log_rrset_key(VERB_ALGO, "found parent-side NS in cache", akey);
 		dp->has_parent_side_NS = 1;
@@ -1184,7 +1184,7 @@ iter_lookup_parent_NS_from_cache(struct module_env* env, struct delegpt* dp,
 	return 1;
 }
 
-int iter_lookup_parent_glue_from_cache(struct module_env* env,
+int iter_lookup_parent_glue_from_cache(struct module_qstate* qstate,
         struct delegpt* dp, struct regional* region, struct query_info* qinfo)
 {
 	struct ub_packed_rrset_key* akey;
@@ -1192,9 +1192,9 @@ int iter_lookup_parent_glue_from_cache(struct module_env* env,
 	size_t num = delegpt_count_targets(dp);
 	for(ns = dp->nslist; ns; ns = ns->next) {
 		/* get cached parentside A */
-		akey = rrset_cache_lookup(env->rrset_cache, ns->name, 
+		akey = rrset_cache_lookup(qstate->query_view_env->rrset_cache, ns->name, 
 			ns->namelen, LDNS_RR_TYPE_A, qinfo->qclass, 
-			PACKED_RRSET_PARENT_SIDE, *env->now, 0);
+			PACKED_RRSET_PARENT_SIDE, *qstate->env->now, 0);
 		if(akey) {
 			log_rrset_key(VERB_ALGO, "found parent-side", akey);
 			ns->done_pside4 = 1;
@@ -1204,9 +1204,9 @@ int iter_lookup_parent_glue_from_cache(struct module_env* env,
 			lock_rw_unlock(&akey->entry.lock);
 		}
 		/* get cached parentside AAAA */
-		akey = rrset_cache_lookup(env->rrset_cache, ns->name, 
+		akey = rrset_cache_lookup(qstate->query_view_env->rrset_cache, ns->name, 
 			ns->namelen, LDNS_RR_TYPE_AAAA, qinfo->qclass, 
-			PACKED_RRSET_PARENT_SIDE, *env->now, 0);
+			PACKED_RRSET_PARENT_SIDE, *qstate->env->now, 0);
 		if(akey) {
 			log_rrset_key(VERB_ALGO, "found parent-side", akey);
 			ns->done_pside6 = 1;
@@ -1398,7 +1398,7 @@ iter_stub_fwd_no_cache(struct module_qstate *qstate, struct query_info *qinf)
 	/* Check for stub. */
 	stub = hints_lookup_stub(qstate->env->hints, qinf->qname,
 	    qinf->qclass, NULL);
-	dp = forwards_lookup(qstate->env->fwds, qinf->qname, qinf->qclass);
+	dp = forwards_lookup(qstate->query_view_env->fwds, qinf->qname, qinf->qclass);
 
 	/* see if forward or stub is more pertinent */
 	if(stub && stub->dp && dp) {

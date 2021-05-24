@@ -87,6 +87,11 @@ struct config_parser_state* cfg_parser = 0;
 /** init ports possible for use */
 static void init_outgoing_availports(int* array, int num);
 
+#define	DEFAULT_RRSET_SIZE  (4 * 1024 * 1024)  // 4M default
+#define	DEFAULT_MSG_SIZE    (4 * 1024 * 1024)  // 4M default
+#define	DEFAULT_KEY_SIZE    (4 * 1024 * 1024)  // 4M default
+#define	DEFAULT_NEG_SIZE    (1 * 1024 * 1024)  // 1M default
+
 struct config_file* 
 config_create(void)
 {
@@ -154,10 +159,10 @@ config_create(void)
 	cfg->stream_wait_size = 4 * 1024 * 1024;
 	cfg->edns_buffer_size = 1232; /* from DNS flagday recommendation */
 	cfg->msg_buffer_size = 65552; /* 64 k + a small margin */
-	cfg->msg_cache_size = 4 * 1024 * 1024;
+	cfg->msg_cache_size = DEFAULT_MSG_SIZE;
 	cfg->msg_cache_slabs = 4;
 	cfg->jostle_time = 200;
-	cfg->rrset_cache_size = 4 * 1024 * 1024;
+	cfg->rrset_cache_size = DEFAULT_RRSET_SIZE;
 	cfg->rrset_cache_slabs = 4;
 	cfg->host_ttl = 900;
 	cfg->bogus_ttl = 60;
@@ -266,9 +271,9 @@ config_create(void)
 	cfg->del_holddown = 30*24*3600;
 	cfg->keep_missing = 366*24*3600; /* one year plus a little leeway */
 	cfg->permit_small_holddown = 0;
-	cfg->key_cache_size = 4 * 1024 * 1024;
+	cfg->key_cache_size = DEFAULT_KEY_SIZE;
 	cfg->key_cache_slabs = 4;
-	cfg->neg_cache_size = 1 * 1024 * 1024;
+	cfg->neg_cache_size = DEFAULT_NEG_SIZE;
 	cfg->local_zones = NULL;
 	cfg->local_zones_nodefault = NULL;
 #ifdef USE_IPSET
@@ -369,6 +374,103 @@ config_create(void)
 error_exit:
 	config_delete(cfg);
 	return NULL;
+}
+
+struct config_view*
+config_view_create(struct config_file* server)
+{
+	struct config_view* vcfg;
+
+	if ((vcfg = calloc(1, sizeof(*vcfg))) != NULL) {
+		struct config_file *cfg= &vcfg->cfg_view;
+
+		vcfg->cfg_server = server;
+
+		// Copy over values from the server configuration that may be set
+		// in the view clause but should be inherited, e.g., dns64_synthall.
+		// Other view configuration values are set to zero (NULL) to indicate
+		// they weren't set in the view declaration.
+		//
+		// TODO: We would like to inherit all server values that are referenced
+		//       in the resolution process.
+
+		cfg->dns64_synthall            = server->dns64_synthall;
+
+		// Even though the cache sizes are set to zero (undefined), inherit
+		// the number of slabs from the server configuration.
+
+		cfg->msg_cache_slabs   = server->msg_cache_slabs;
+		cfg->rrset_cache_slabs = server->rrset_cache_slabs;
+	}
+
+	return (vcfg);
+}
+
+int
+config_finalize(struct config_file *server)
+{
+	// Make sure every configured view has match clients, match destinations,
+	// or is listed in an access-control-view clause
+
+	struct config_view *vcfg;
+	int rval = 0;
+
+	for (vcfg = server->views; vcfg != NULL; vcfg = vcfg->next) {
+		if (vcfg->match_clients != NULL || vcfg->match_destinations != NULL) {
+			continue;
+		}
+
+		struct config_str2list *acl;
+
+		for (acl = server->acl_view; acl != NULL; acl = acl->next) {
+			if (strcmp(acl->str2, vcfg->name) == 0) {
+				break;
+			}
+		}
+
+		if (acl == NULL) {
+			log_err("View \"%s\" is unreferenced", vcfg->name);
+			rval = 1;
+		}
+	}
+
+	return (rval);
+}
+
+int
+config_view_validate(struct config_view* view)
+{
+	struct config_file *cfg = &view->cfg_view;
+
+	if (view == NULL || view->name == NULL) {
+		log_err("view must have a name");
+		return (-1);
+	}
+
+	// If either cache size was specified, set an unintialized value
+	// to the default
+
+	if (cfg->rrset_cache_size != 0 || cfg->msg_cache_size != 0) {
+		if (cfg->msg_cache_size == 0) {
+			cfg->msg_cache_size = DEFAULT_MSG_SIZE;
+		} else if (cfg->rrset_cache_size == 0) {
+			cfg->rrset_cache_size = DEFAULT_RRSET_SIZE;
+		}
+	}
+
+	// If stubs, root hints, or forward zones were specified, a view-specific
+	// cache must be configured
+
+	if (cfg->stubs != NULL ||
+	    cfg->forwards != NULL ||
+	        cfg->root_hints != NULL) {
+		if (cfg->msg_cache_size == 0) {
+			log_err("must configure caches for view %s", view->name);
+			return (-1);
+		}
+	}
+	
+	return (0);
 }
 
 struct config_file* config_create_forlib(void)
@@ -1232,11 +1334,14 @@ static void
 create_cfg_parser(struct config_file* cfg, char* filename, const char* chroot)
 {
 	static struct config_parser_state st;
+
 	cfg_parser = &st;
 	cfg_parser->filename = filename;
 	cfg_parser->line = 1;
 	cfg_parser->errors = 0;
 	cfg_parser->cfg = cfg;
+	cfg_parser->server_cfg = cfg;
+	cfg_parser->view_cfg = NULL;
 	cfg_parser->chroot = chroot;
 	init_cfg_parse();
 }
@@ -1344,6 +1449,21 @@ struct config_stub* cfg_stub_find(struct config_stub*** pp, const char* nm)
 }
 
 void
+config_delstrobjlist(struct config_strobjlist* p)
+{
+	while(p) {
+		struct config_strobjlist *np = p->next;
+
+		// Like the other string lists, we free the associated string,
+		// but we don't free the object, which could be anything, even
+		// a linked list.
+
+		free(p->str);
+		free(p);
+		p = np;
+	}
+}
+void
 config_delstrlist(struct config_strlist* p)
 {
 	struct config_strlist *np;
@@ -1430,17 +1550,16 @@ config_delstubs(struct config_stub* p)
 	}
 }
 
+static void config_cleanup(struct config_file* cfg);
+
 void
 config_delview(struct config_view* p)
 {
 	if(!p) return;
 	free(p->name);
-	config_deldblstrlist(p->local_zones);
-	config_delstrlist(p->local_zones_nodefault);
-#ifdef USE_IPSET
-	config_delstrlist(p->local_zones_ipset);
-#endif
-	config_delstrlist(p->local_data);
+	config_delstrobjlist(p->match_destinations);
+	config_delstrlist(p->match_clients);
+	config_cleanup(&p->cfg_view);
 	free(p);
 }
 
@@ -1480,10 +1599,9 @@ config_del_strbytelist(struct config_strbytelist* p)
 	}
 }
 
-void 
-config_delete(struct config_file* cfg)
+static void 
+config_cleanup(struct config_file* cfg)
 {
-	if(!cfg) return;
 	free(cfg->username);
 	free(cfg->chrootdir);
 	free(cfg->directory);
@@ -1498,10 +1616,12 @@ config_delete(struct config_file* cfg)
 	free(cfg->tls_ciphers);
 	free(cfg->tls_ciphersuites);
 	free(cfg->http_endpoint);
+
 	if(cfg->log_identity) {
 		log_ident_revert_to_default();
 		free(cfg->log_identity);
 	}
+
 	config_del_strarray(cfg->ifs, cfg->num_ifs);
 	config_del_strarray(cfg->out_ifs, cfg->num_out_ifs);
 	config_delstubs(cfg->stubs);
@@ -1544,6 +1664,7 @@ config_delete(struct config_file* cfg)
 	config_del_strbytelist(cfg->respip_tags);
 	config_deltrplstrlist(cfg->acl_tag_actions);
 	config_deltrplstrlist(cfg->acl_tag_datas);
+	config_delstrobjlist(cfg->view_destinations);
 	config_delstrlist(cfg->control_ifs.first);
 	free(cfg->server_key_file);
 	free(cfg->server_cert_file);
@@ -1579,7 +1700,15 @@ config_delete(struct config_file* cfg)
 	free(cfg->ipset_name_v4);
 	free(cfg->ipset_name_v6);
 #endif
-	free(cfg);
+}
+
+void 
+config_delete(struct config_file* cfg)
+{
+	if (cfg != NULL) {
+		config_cleanup(cfg);
+		free(cfg);
+	}
 }
 
 static void 
@@ -1765,6 +1894,31 @@ cfg_strlist_find(struct config_strlist* head, const char *item)
 		s = s->next;
 	}
 	return NULL;
+}
+
+int 
+cfg_strobjlist_insert(struct config_strobjlist** head,
+                      char* str,
+                      void* obj)
+{
+	struct config_strobjlist *s;
+
+	if (str == NULL) {
+		/* Nothing */;
+	} else if (head == NULL) {
+		free(str);
+	} else if ((s = malloc(sizeof(struct config_strobjlist))) == NULL) {
+		free(str);
+	} else {
+		s->str  = str;
+		s->obj  = obj;
+		s->next = *head;
+		*head   = s;
+
+		return (1);
+	}
+
+	return (0);
 }
 
 int 
@@ -1987,24 +2141,25 @@ find_tag_id(struct config_file* cfg, const char* tag)
 int
 config_add_tag(struct config_file* cfg, const char* tag)
 {
-	char** newarray;
-	char* newtag;
-	if(find_tag_id(cfg, tag) != -1)
-		return 1; /* nothing to do */
-	newarray = (char**)malloc(sizeof(char*)*(cfg->num_tags+1));
-	if(!newarray)
-		return 0;
-	newtag = strdup(tag);
-	if(!newtag) {
-		free(newarray);
-		return 0;
+	if (find_tag_id(cfg, tag) == -1) {
+		char** newarray;
+		char* newtag;
+
+		if ((newtag = strdup(tag)) == NULL) {
+			return 0;
+		}
+
+		newarray = realloc(cfg->tagname,
+		                   sizeof(char *) * (cfg->num_tags + 1));
+
+		if (newarray == NULL) {
+			return 0;
+		}
+
+		newarray[cfg->num_tags++] = newtag;
+		cfg->tagname = newarray;
 	}
-	if(cfg->tagname) {
-		memcpy(newarray, cfg->tagname, sizeof(char*)*cfg->num_tags);
-		free(cfg->tagname);
-	}
-	newarray[cfg->num_tags++] = newtag;
-	cfg->tagname = newarray;
+
 	return 1;
 }
 

@@ -421,7 +421,7 @@ int val_favorite_ds_algo(struct ub_packed_rrset_key* ds_rrset);
  *	negative cache need to be examined.
  * @return a dns_msg on success. NULL on failure.
  */
-struct dns_msg* val_find_DS(struct module_env* env, uint8_t* nm, size_t nmlen,
+struct dns_msg* val_find_DS(struct module_qstate* qstate, uint8_t* nm, size_t nmlen,
 	uint16_t c, struct regional* region, uint8_t* topname);
 
 #endif /* VALIDATOR_VAL_UTILS_H */

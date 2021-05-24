@@ -146,8 +146,9 @@ need_to_update_rrset(void* nd, void* cd, time_t timenow, int equal, int ns)
                 return 1;
 	}
 	/*	o item in cache has expired */
-	if( cached->ttl < timenow )
+	if( cached->ttl < timenow ){
 		return 1;
+	}
 	/*  o same trust, but different in data - insert it */
 	if( newd->trust == cached->trust && !equal ) {
 		/* if this is type NS, do not 'stick' to owner that changes

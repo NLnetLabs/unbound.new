@@ -644,51 +644,112 @@ ssl_read_line(RES* res, char* buf, size_t max)
 	return 0;
 }
 
-/** skip whitespace, return new pointer into string */
-static char*
-skipwhite(char* str)
-{
-	/* EOS \0 is not a space */
-	while( isspace((unsigned char)*str) ) 
-		str++;
-	return str;
-}
-
 /** send the OK to the control client */
 static void send_ok(RES* ssl)
 {
 	(void)ssl_printf(ssl, "ok\n");
 }
 
+/** Return 1 if this is the server view; complain and return 0 otherwise */
+static inline int
+view_is_server(struct view* v)
+{
+	return (v->server_view == v);
+}
+
+/** Return 1 if this is the server view; complain and return 0 otherwise */
+static int
+view_is_valid(RES *ssl, struct view* v)
+{
+	if (view_is_server(v)) {
+		return 1;
+	}
+
+	ssl_printf(ssl, "not a valid command for a view\n");
+	return 0;
+}
+
+/** Return 1 if view has its own caches; complain and return 0 otherwise */
+static int
+view_has_caches(RES *ssl, struct view* v)
+{
+	if (view_is_server(v) || (v->view_flags & VIEW_FLAG_SHARE_CACHE) == 0) {
+		return 1;
+	}
+
+	ssl_printf(ssl, "View %s does not have its own caches\n", v->name);
+	return 0;
+}
+
+/** Return 1 if view has its own forwards; complain and return 0 otherwise */
+static int
+view_has_forwards(RES *ssl, struct view* v)
+{
+	if (view_is_server(v) || (v->view_flags & VIEW_FLAG_SHARE_FWDS) == 0) {
+		return 1;
+	}
+
+	ssl_printf(ssl, "View %s does not have its own forward zones\n", v->name);
+	return 0;
+}
+
+/** Return 1 if view has its own forwards; complain and return 0 otherwise */
+static int
+view_has_hints(RES *ssl, struct view* v)
+{
+	if (view_is_server(v) || (v->view_flags & VIEW_FLAG_SHARE_HINTS) == 0) {
+		return 1;
+	}
+
+	ssl_printf(ssl, "View %s does not have its own iterator hints\n", v->name);
+	return 0;
+}
+
 /** do the stop command */
 static void
-do_stop(RES* ssl, struct worker* worker)
+do_stop(RES* ssl,
+        struct worker* worker,
+        struct view* v,
+        char* argp)
 {
-	worker->need_to_exit = 1;
-	comm_base_exit(worker->base);
-	send_ok(ssl);
+	if (view_is_valid(ssl, v)) {
+		worker->need_to_exit = 1;
+		comm_base_exit(worker->base);
+		send_ok(ssl);
+	}
 }
 
 /** do the reload command */
 static void
-do_reload(RES* ssl, struct worker* worker)
+do_reload(RES* ssl,
+          struct worker* worker,
+          struct view* v,
+          char* argp)
 {
-	worker->need_to_exit = 0;
-	comm_base_exit(worker->base);
-	send_ok(ssl);
+	if (view_is_valid(ssl, v)) {
+		worker->need_to_exit = 0;
+		comm_base_exit(worker->base);
+		send_ok(ssl);
+	}
 }
 
 /** do the verbosity command */
 static void
-do_verbosity(RES* ssl, char* str)
+do_verbosity(RES* ssl,
+             struct worker* worker,
+             struct view* v,
+             char* argp)
 {
-	int val = atoi(str);
-	if(val == 0 && strcmp(str, "0") != 0) {
-		ssl_printf(ssl, "error in verbosity number syntax: %s\n", str);
-		return;
+	if (view_is_valid(ssl, v)) {
+		int val = atoi(argp);
+
+		if(val == 0 && strcmp(argp, "0") != 0) {
+			ssl_printf(ssl, "error in verbosity number syntax: %s\n", argp);
+		} else {
+			verbosity = val;
+			send_ok(ssl);
+		}
 	}
-	verbosity = val;
-	send_ok(ssl);
 }
 
 /** print stats from statinfo */
@@ -1084,19 +1145,70 @@ print_ext(RES* ssl, struct ub_stats_info* s)
 	return 1;
 }
 
+/** print the accumlated stats for the specified view */
+
+static void
+do_view_stats(RES* ssl,
+              struct view* v,
+              struct view_stats* vstats)
+{
+	char tag[strlen(v->name) + 7];
+
+	sprintf(tag, "view.%s.", v->name);
+
+	long long nq = vstats->num_queries;
+	long long nm = vstats->num_queries_missed_cache;
+
+	ssl_printf(ssl, "%snum.queries" SQ ARG_LL "u\n", tag, nq);
+	ssl_printf(ssl, "%snum.queries_ip_ratelimited" SQ ARG_LL "u\n",
+	                tag,
+	                vstats->num_queries_ip_ratelimited);
+	ssl_printf(ssl, "%snum.cachehits" SQ ARG_LL "u\n", tag, nq - nm);
+	ssl_printf(ssl, "%snum.cachemiss" SQ ARG_LL "u\n", tag, nm);
+	ssl_printf(ssl, "%snum.prefetch" SQ ARG_LL "u\n",
+	                tag,
+	                vstats->num_queries_prefetch);
+	ssl_printf(ssl, "%snum.expired" SQ ARG_LL "u\n",
+	                tag,
+	                vstats->ans_expired);
+
+	if ((v->view_flags & VIEW_FLAG_SHARE_CACHE) == 0) {
+		ssl_printf(ssl, "%smem.cache.rrset" SQ "%lu\n",
+	                    tag,
+		                slabhash_get_mem(&v->rrset_cache->table));
+		ssl_printf(ssl, "%smem.cache.message" SQ "%lu\n",
+	                    tag,
+		                slabhash_get_mem(v->msg_cache));
+		ssl_printf(ssl, "%srrset.cache.count" SQ "%lu\n",
+	                    tag,
+		                count_slabhash_entries(&v->rrset_cache->table));
+		ssl_printf(ssl, "%smsg.cache.count" SQ "%lu\n",
+	                    tag,
+		                count_slabhash_entries(v->msg_cache));
+	}
+}
+
 /** do the stats command */
 static void
-do_stats(RES* ssl, struct worker* worker, int reset)
+do_server_stats(RES* ssl,
+                struct worker* worker,
+                int reset)
 {
 	struct daemon* daemon = worker->daemon;
+	struct views* vs = worker->daemon->views;
 	struct ub_stats_info total;
 	struct ub_stats_info s;
+	struct view_stats vstats[vs->vtree.count];
 	int i;
+
 	memset(&total, 0, sizeof(total));
+	memset(vstats, 0, sizeof(vstats));
+
 	log_assert(daemon->num > 0);
 	/* gather all thread statistics in one place */
 	for(i=0; i<daemon->num; i++) {
-		server_stats_obtain(worker, daemon->workers[i], &s, reset);
+		server_stats_obtain(worker, daemon->workers[i], &s, vstats, reset);
+
 		if(!print_thread_stats(ssl, i, &s))
 			return;
 		if(i == 0)
@@ -1117,6 +1229,86 @@ do_stats(RES* ssl, struct worker* worker, int reset)
 		if(!print_ext(ssl, &total))
 			return;
 	}
+
+	struct view_node *vn;
+
+	i = 0;
+
+	RBTREE_FOR(vn, struct view_node *, &vs->vtree) {
+		do_view_stats(ssl, &vn->vinfo, &vstats[i++]);
+	}
+}
+
+/** Sum the per-view stats across the threads - clear if indicated
+ ** Note that we have to request the other threads to clear as there
+ ** would be race conditions otherwise
+ */
+static void
+view_stats_sum(struct view *v, struct view_stats *s)
+{
+	struct view_stats *vs = v->view_stats;
+	unsigned int n = v->view_threads;
+	unsigned int t;
+
+	long long queries  = 0;
+	long long ratelim  = 0;
+	long long missed   = 0;
+	long long prefetch = 0;
+	long long expired  = 0;
+
+	for (t = 0; t < n; t++, vs++) {
+		queries  += vs->num_queries;
+		ratelim  += vs->num_queries_ip_ratelimited;
+		missed   += vs->num_queries_missed_cache;
+		prefetch += vs->num_queries_prefetch;
+		expired  += vs->ans_expired;
+	}
+
+	s->num_queries                = queries;
+	s->num_queries_ip_ratelimited = ratelim;
+	s->num_queries_missed_cache   = missed;
+	s->num_queries_prefetch       = prefetch;
+	s->ans_expired                = expired;
+}
+
+static void
+do_stats(RES* ssl,
+         struct worker* worker,
+         struct view* v,
+         int reset)
+{
+	if (view_is_server(v)) {
+		// For the server, add the stats for each configure view
+
+		do_server_stats(ssl, worker, reset);
+	} else if (reset) {
+		ssl_printf(ssl, "Clearing stats not supported for a view\n");
+	} else {
+		struct view_stats vs;
+
+		view_stats_sum(v, &vs);
+		do_view_stats(ssl, v, &vs);
+	}
+}
+
+static void
+do_stats_reset(RES* ssl,
+               struct worker* worker,
+               struct view* v,
+               char* argp)
+{
+	// Only reset when statistics-cumulative is not set
+
+	do_stats(ssl, worker, v, worker->env.cfg->stat_cumulative == 0);
+}
+
+static void
+do_stats_noreset(RES* ssl,
+                 struct worker* worker,
+                 struct view* v,
+                 char* argp)
+{
+	do_stats(ssl, worker, v, 0);
 }
 
 /** parse commandline argument domain name */
@@ -1149,29 +1341,83 @@ parse_arg_name(RES* ssl, char* str, uint8_t** res, size_t* len, int* labs)
 	return 1;
 }
 
-/** find second argument, modifies string */
-static int
-find_arg2(RES* ssl, char* arg, char** arg2)
+/** skip whitespace, return new pointer into string */
+static char*
+skipwhite(char* str)
 {
-	char* as = strchr(arg, ' ');
-	char* at = strchr(arg, '\t');
-	if(as && at) {
-		if(at < as)
-			as = at;
-		as[0]=0;
-		*arg2 = skipwhite(as+1);
-	} else if(as) {
-		as[0]=0;
-		*arg2 = skipwhite(as+1);
-	} else if(at) {
-		at[0]=0;
-		*arg2 = skipwhite(at+1);
-	} else {
-		ssl_printf(ssl, "error could not find next argument "
-			"after %s\n", arg);
-		return 0;
+	/* EOS \0 is not a space */
+	while( isspace((unsigned char)*str) ) 
+		str++;
+	return str;
+}
+
+// Scan the next argument in the string and NUL terminate. arg must point to
+// the beginning of an argument or the end of a string. Save the start of the
+// next argument in next
+//
+// Return 0 and send a diatgnostic if no argument was found; otherwise 
+// If no argument found when expected, send a diagnostic
+
+static int
+find_arg2(RES* ssl, char* arg, char** next)
+{
+	if (arg[0] == '\0') {
+		ssl_printf(ssl, "error could not find next argument\n");
+		return (0);
 	}
-	return 1;
+
+	char c;
+
+	// Find the end of the token
+
+	while ((c = *arg) != '\0' && c != ' ' && c != '\t') {
+		arg++;
+	}
+
+	if (c != '\0') {
+		*arg = '\0';
+
+		arg = skipwhite(arg + 1);
+	}
+
+	*next = arg;
+	return (1);
+}
+
+static struct view *
+check_view_arg(RES* ssl,
+               struct worker* worker,
+               struct view* v,
+               char** argp)
+{
+	char* vname = *argp;
+	char* arg2;
+
+	if (find_arg2(ssl, vname, &arg2)) {
+		struct view* varg;
+
+		varg = views_find_view(worker->daemon->views, vname, 0);
+
+		// If we cannot find the specified view name, or the named view
+		// differs from the command view and the command view is not the
+		// default view, complain
+
+		if (varg == NULL) {
+			ssl_printf(ssl,"no view with name: %s\n", vname);
+		} else if (varg != v && !view_is_server(v)) {
+			lock_rw_unlock(&varg->lock);
+			ssl_printf(ssl,"conflicting view specified: %s\n", vname);
+		} else {
+			lock_rw_unlock(&varg->lock);
+
+			// Set the argument pointer to the rest of the command
+
+			*argp = arg2;
+			return (varg);
+		}
+	}
+
+	return (NULL);
 }
 
 /** Add a new zone */
@@ -1193,9 +1439,10 @@ perform_zone_add(RES* ssl, struct local_zones* zones, char* arg)
 		free(nm);
 		return 0;
 	}
+
 	lock_rw_wrlock(&zones->lock);
-	if((z=local_zones_find(zones, nm, nmlen, 
-		nmlabs, LDNS_RR_CLASS_IN))) {
+
+	if((z=local_zones_find(zones, nm, nmlen, nmlabs, LDNS_RR_CLASS_IN))) {
 		/* already present in tree */
 		lock_rw_wrlock(&z->lock);
 		z->type = t; /* update type anyway */
@@ -1204,42 +1451,100 @@ perform_zone_add(RES* ssl, struct local_zones* zones, char* arg)
 		lock_rw_unlock(&zones->lock);
 		return 1;
 	}
-	if(!local_zones_add_zone(zones, nm, nmlen, 
-		nmlabs, LDNS_RR_CLASS_IN, t)) {
+	if(!local_zones_add_zone(zones, nm, nmlen, nmlabs, LDNS_RR_CLASS_IN, t)) {
 		lock_rw_unlock(&zones->lock);
 		ssl_printf(ssl, "error out of memory\n");
 		return 0;
 	}
+
 	lock_rw_unlock(&zones->lock);
 	return 1;
 }
 
+typedef int (*local_info_add)(RES *, struct view *, char *);
+
+static void
+local_from_client(RES* ssl, struct view* v, char *fmt, local_info_add fnc)
+{
+	char buf[2048];
+	int num = 0;
+
+	while (ssl_read_line(ssl, buf, sizeof(buf))) {
+		if (buf[0] == 0x04 && buf[1] == 0)
+			break; /* end of transmission */
+		if ((*fnc)(ssl, v, buf)) {
+			num++;
+		} else if (!ssl_printf(ssl, "error for input line: %s\n", buf)) {
+			return;
+		}
+	}
+
+	(void)ssl_printf(ssl, fmt, num);
+}
+
+static int
+zone_add(RES* ssl, struct view* v, char* zone_info)
+{
+	lock_rw_wrlock(&v->lock);
+
+	if (v->local_zones == NULL) {
+		if ((v->local_zones = local_zones_create()) == NULL) {
+			lock_rw_unlock(&v->lock);
+			ssl_printf(ssl, "error out of memory\n");
+			return 0;
+		}
+		if (v->server_zones == NULL) {
+			/* Global local-zone is not used for this view,
+			 * therefore add defaults to this view-specic
+			 * local-zone. */
+			struct config_file lz_cfg;
+
+			memset(&lz_cfg, 0, sizeof(lz_cfg));
+			local_zone_enter_defaults(v->local_zones, &lz_cfg);
+		}
+	}
+
+	int ok = perform_zone_add(ssl, v->local_zones, zone_info);
+
+	lock_rw_unlock(&v->lock);
+
+	return ok;
+}
+
 /** Do the local_zone command */
 static void
-do_zone_add(RES* ssl, struct local_zones* zones, char* arg)
+do_zone_add(RES* ssl,
+            struct worker* worker,
+            struct view* v,
+            char* argp)
 {
-	if(!perform_zone_add(ssl, zones, arg))
-		return;
-	send_ok(ssl);
+	if (zone_add(ssl, v, argp)) {
+		send_ok(ssl);
+	}
+}
+
+/** Add a new zone to view */
+static void
+do_view_zone_add(RES* ssl,
+                 struct worker* worker,
+                 struct view* v,
+                 char* argp)
+{
+	if ((v = check_view_arg(ssl, worker, v, &argp)) != NULL) {
+		if (zone_add(ssl, v, argp)) {
+			send_ok(ssl);
+		}
+	}
 }
 
 /** Do the local_zones command */
 static void
-do_zones_add(RES* ssl, struct local_zones* zones)
+do_zones_add(RES* ssl,
+             struct worker* worker,
+             struct view* v,
+             char* argp)
 {
-	char buf[2048];
-	int num = 0;
-	while(ssl_read_line(ssl, buf, sizeof(buf))) {
-		if(buf[0] == 0x04 && buf[1] == 0)
-			break; /* end of transmission */
-		if(!perform_zone_add(ssl, zones, buf)) {
-			if(!ssl_printf(ssl, "error for input line: %s\n", buf))
-				return;
-		}
-		else
-			num++;
-	}
-	(void)ssl_printf(ssl, "added %d zones\n", num);
+	local_from_client(ssl, v, "added %d zones\n", zone_add);
 }
 
 /** Remove a zone */
@@ -1264,70 +1569,145 @@ perform_zone_remove(RES* ssl, struct local_zones* zones, char* arg)
 }
 
 /** Do the local_zone_remove command */
-static void
-do_zone_remove(RES* ssl, struct local_zones* zones, char* arg)
+static int
+zone_remove(RES* ssl, struct view* v, char* zone_name)
 {
-	if(!perform_zone_remove(ssl, zones, arg))
+	lock_rw_wrlock(&v->lock);
+
+	int ok;
+
+	ok = (v->local_zones == NULL) ||
+	        perform_zone_remove(ssl, v->local_zones, zone_name);
+
+	lock_rw_unlock(&v->lock);
+	return (ok);
+}
+
+/** Do the local_zone_remove command */
+static void
+do_zone_remove(RES* ssl,
+               struct worker* worker,
+               struct view* v,
+               char* argp)
+{
+	if (zone_remove(ssl, v, argp)) {
+		send_ok(ssl);
+	}
+}
+
+/** Remove a zone from view */
+static void
+do_view_zone_remove(RES* ssl,
+                    struct worker* worker,
+                    struct view* v,
+                    char* argp)
+{
+	if ((v = check_view_arg(ssl, worker, v, &argp)) == NULL) {
 		return;
-	send_ok(ssl);
+	}
+	if (zone_remove(ssl, v, argp)) {
+		send_ok(ssl);
+	}
 }
 
 /** Do the local_zones_remove command */
 static void
-do_zones_remove(RES* ssl, struct local_zones* zones)
+do_zones_remove(RES* ssl,
+                struct worker* worker,
+                struct view* v,
+                char* argp)
 {
-	char buf[2048];
-	int num = 0;
-	while(ssl_read_line(ssl, buf, sizeof(buf))) {
-		if(buf[0] == 0x04 && buf[1] == 0)
-			break; /* end of transmission */
-		if(!perform_zone_remove(ssl, zones, buf)) {
-			if(!ssl_printf(ssl, "error for input line: %s\n", buf))
-				return;
-		}
-		else
-			num++;
-	}
-	(void)ssl_printf(ssl, "removed %d zones\n", num);
+	local_from_client(ssl, v, "removed %d zones\n", zone_remove);
 }
 
 /** Add new RR data */
 static int
 perform_data_add(RES* ssl, struct local_zones* zones, char* arg)
 {
-	if(!local_zones_add_RR(zones, arg)) {
-		ssl_printf(ssl,"error in syntax or out of memory, %s\n", arg);
-		return 0;
+	if (local_zones_add_RR(zones, arg)) {
+		return 1;
 	}
-	return 1;
+
+	ssl_printf(ssl,"error in syntax or out of memory, %s\n", arg);
+	return 0;
+}
+
+static int
+data_add(RES* ssl, struct view* v, char* zone_data)
+{
+	lock_rw_wrlock(&v->lock);
+
+	if (v->local_zones == NULL) {
+		if ((v->local_zones = local_zones_create()) == NULL) {
+			lock_rw_unlock(&v->lock);
+			ssl_printf(ssl,"error out of memory\n");
+			return 0;
+		}
+	}
+
+	int ok = perform_data_add(ssl, v->local_zones, zone_data);
+
+	lock_rw_unlock(&v->lock);
+
+	return ok;
 }
 
 /** Do the local_data command */
 static void
-do_data_add(RES* ssl, struct local_zones* zones, char* arg)
+do_data_add(RES* ssl,
+            struct worker* worker,
+            struct view* v,
+            char* argp)
 {
-	if(!perform_data_add(ssl, zones, arg))
+	if (data_add(ssl, v, argp)) {
+		send_ok(ssl);
+	}
+}
+
+/** Add new RR data to view */
+static void
+do_view_data_add(RES* ssl,
+                 struct worker* worker,
+                 struct view* v,
+                 char* argp)
+{
+	if ((v = check_view_arg(ssl, worker, v, &argp)) == NULL) {
 		return;
-	send_ok(ssl);
+	}
+	if (data_add(ssl, v, argp)) {
+		send_ok(ssl);
+	}
+}
+
+static void
+datas_add(RES* ssl, struct view *v)
+{
+	local_from_client(ssl, v, "added %d datas\n", data_add);
+}
+
+/** Add new RR data from stdin to view */
+static void
+do_view_datas_add(RES* ssl,
+                  struct worker* worker,
+                  struct view* v,
+                  char* argp)
+{
+	if ((v = check_view_arg(ssl, worker, v, &argp)) == NULL) {
+		return;
+	}
+
+	datas_add(ssl, v);
+	lock_rw_unlock(&v->lock);
 }
 
 /** Do the local_datas command */
 static void
-do_datas_add(RES* ssl, struct local_zones* zones)
+do_datas_add(RES* ssl,
+             struct worker* worker,
+             struct view* v,
+             char* argp)
 {
-	char buf[2048];
-	int num = 0;
-	while(ssl_read_line(ssl, buf, sizeof(buf))) {
-		if(buf[0] == 0x04 && buf[1] == 0)
-			break; /* end of transmission */
-		if(!perform_data_add(ssl, zones, buf)) {
-			if(!ssl_printf(ssl, "error for input line: %s\n", buf))
-				return;
-		}
-		else
-			num++;
-	}
-	(void)ssl_printf(ssl, "added %d datas\n", num);
+	datas_add(ssl, v);
 }
 
 /** Remove RR data */
@@ -1345,204 +1725,107 @@ perform_data_remove(RES* ssl, struct local_zones* zones, char* arg)
 	return 1;
 }
 
+static int
+data_remove(RES* ssl, struct view* v, char* zone_data)
+{
+	lock_rw_wrlock(&v->lock);
+
+	int ok;
+
+	ok = (v->local_zones == NULL) ||
+	        perform_data_remove(ssl, v->local_zones, zone_data);
+
+	lock_rw_unlock(&v->lock);
+	return (ok);
+}
+
 /** Do the local_data_remove command */
 static void
-do_data_remove(RES* ssl, struct local_zones* zones, char* arg)
+do_data_remove(RES* ssl,
+               struct worker* worker,
+               struct view* v,
+               char* argp)
 {
-	if(!perform_data_remove(ssl, zones, arg))
-		return;
-	send_ok(ssl);
+	if (data_remove(ssl, v, argp)) {
+		send_ok(ssl);
+	}
+}
+
+static void
+datas_remove(RES* ssl, struct view* v)
+{
+	local_from_client(ssl, v, "removed %d datas\n", data_remove);
 }
 
 /** Do the local_datas_remove command */
 static void
-do_datas_remove(RES* ssl, struct local_zones* zones)
+do_datas_remove(RES* ssl,
+                struct worker* worker,
+                struct view* v,
+                char* argp)
 {
-	char buf[2048];
-	int num = 0;
-	while(ssl_read_line(ssl, buf, sizeof(buf))) {
-		if(buf[0] == 0x04 && buf[1] == 0)
-			break; /* end of transmission */
-		if(!perform_data_remove(ssl, zones, buf)) {
-			if(!ssl_printf(ssl, "error for input line: %s\n", buf))
-				return;
-		}
-		else
-			num++;
-	}
-	(void)ssl_printf(ssl, "removed %d datas\n", num);
-}
-
-/** Add a new zone to view */
-static void
-do_view_zone_add(RES* ssl, struct worker* worker, char* arg)
-{
-	char* arg2;
-	struct view* v;
-	if(!find_arg2(ssl, arg, &arg2))
-		return;
-	v = views_find_view(worker->daemon->views,
-		arg, 1 /* get write lock*/);
-	if(!v) {
-		ssl_printf(ssl,"no view with name: %s\n", arg);
-		return;
-	}
-	if(!v->local_zones) {
-		if(!(v->local_zones = local_zones_create())){
-			lock_rw_unlock(&v->lock);
-			ssl_printf(ssl,"error out of memory\n");
-			return;
-		}
-		if(!v->isfirst) {
-			/* Global local-zone is not used for this view,
-			 * therefore add defaults to this view-specic
-			 * local-zone. */
-			struct config_file lz_cfg;
-			memset(&lz_cfg, 0, sizeof(lz_cfg));
-			local_zone_enter_defaults(v->local_zones, &lz_cfg);
-		}
-	}
-	do_zone_add(ssl, v->local_zones, arg2);
-	lock_rw_unlock(&v->lock);
-}
-
-/** Remove a zone from view */
-static void
-do_view_zone_remove(RES* ssl, struct worker* worker, char* arg)
-{
-	char* arg2;
-	struct view* v;
-	if(!find_arg2(ssl, arg, &arg2))
-		return;
-	v = views_find_view(worker->daemon->views,
-		arg, 1 /* get write lock*/);
-	if(!v) {
-		ssl_printf(ssl,"no view with name: %s\n", arg);
-		return;
-	}
-	if(!v->local_zones) {
-		lock_rw_unlock(&v->lock);
-		send_ok(ssl);
-		return;
-	}
-	do_zone_remove(ssl, v->local_zones, arg2);
-	lock_rw_unlock(&v->lock);
-}
-
-/** Add new RR data to view */
-static void
-do_view_data_add(RES* ssl, struct worker* worker, char* arg)
-{
-	char* arg2;
-	struct view* v;
-	if(!find_arg2(ssl, arg, &arg2))
-		return;
-	v = views_find_view(worker->daemon->views,
-		arg, 1 /* get write lock*/);
-	if(!v) {
-		ssl_printf(ssl,"no view with name: %s\n", arg);
-		return;
-	}
-	if(!v->local_zones) {
-		if(!(v->local_zones = local_zones_create())){
-			lock_rw_unlock(&v->lock);
-			ssl_printf(ssl,"error out of memory\n");
-			return;
-		}
-	}
-	do_data_add(ssl, v->local_zones, arg2);
-	lock_rw_unlock(&v->lock);
-}
-
-/** Add new RR data from stdin to view */
-static void
-do_view_datas_add(RES* ssl, struct worker* worker, char* arg)
-{
-	struct view* v;
-	v = views_find_view(worker->daemon->views,
-		arg, 1 /* get write lock*/);
-	if(!v) {
-		ssl_printf(ssl,"no view with name: %s\n", arg);
-		return;
-	}
-	if(!v->local_zones) {
-		if(!(v->local_zones = local_zones_create())){
-			lock_rw_unlock(&v->lock);
-			ssl_printf(ssl,"error out of memory\n");
-			return;
-		}
-	}
-	do_datas_add(ssl, v->local_zones);
-	lock_rw_unlock(&v->lock);
+	datas_remove(ssl, v);
 }
 
 /** Remove RR data from view */
 static void
-do_view_data_remove(RES* ssl, struct worker* worker, char* arg)
+do_view_data_remove(RES* ssl,
+                    struct worker* worker,
+                    struct view* v,
+                    char* argp)
 {
-	char* arg2;
-	struct view* v;
-	if(!find_arg2(ssl, arg, &arg2))
-		return;
-	v = views_find_view(worker->daemon->views,
-		arg, 1 /* get write lock*/);
-	if(!v) {
-		ssl_printf(ssl,"no view with name: %s\n", arg);
+	if ((v = check_view_arg(ssl, worker, v, &argp)) == NULL) {
 		return;
 	}
-	if(!v->local_zones) {
-		lock_rw_unlock(&v->lock);
+	if (data_remove(ssl, v, argp)) {
 		send_ok(ssl);
-		return;
 	}
-	do_data_remove(ssl, v->local_zones, arg2);
-	lock_rw_unlock(&v->lock);
 }
 
 /** Remove RR data from stdin from view */
 static void
-do_view_datas_remove(RES* ssl, struct worker* worker, char* arg)
+do_view_datas_remove(RES* ssl,
+                     struct worker* worker,
+                     struct view* v,
+                     char* argp)
 {
-	struct view* v;
-	v = views_find_view(worker->daemon->views,
-		arg, 1 /* get write lock*/);
-	if(!v) {
-		ssl_printf(ssl,"no view with name: %s\n", arg);
-		return;
-	}
-	if(!v->local_zones){
-		lock_rw_unlock(&v->lock);
-		ssl_printf(ssl, "removed 0 datas\n");
+	if ((v = check_view_arg(ssl, worker, v, &argp)) == NULL) {
 		return;
 	}
 
-	do_datas_remove(ssl, v->local_zones);
-	lock_rw_unlock(&v->lock);
+	datas_remove(ssl, v);
 }
 
 /** cache lookup of nameservers */
 static void
-do_lookup(RES* ssl, struct worker* worker, char* arg)
+do_lookup(RES* ssl,
+          struct worker* worker,
+          struct view* v,
+          char* argp)
 {
-	uint8_t* nm;
-	int nmlabs;
-	size_t nmlen;
-	if(!parse_arg_name(ssl, arg, &nm, &nmlen, &nmlabs))
-		return;
-	(void)print_deleg_lookup(ssl, worker, nm, nmlen, nmlabs);
-	free(nm);
+	if (view_is_valid(ssl, v)) {
+		size_t nmlen;
+		uint8_t* nm;
+		int nmlabs;
+
+		if(parse_arg_name(ssl, argp, &nm, &nmlen, &nmlabs)) {
+			(void)print_deleg_lookup(ssl, worker, v, nm, nmlen, nmlabs);
+			free(nm);
+		}
+	}
 }
 
 /** flush something from rrset and msg caches */
 static void
-do_cache_remove(struct worker* worker, uint8_t* nm, size_t nmlen,
-	uint16_t t, uint16_t c)
+do_cache_remove(struct view* v,
+                uint8_t* nm, size_t nmlen,
+                uint16_t t, uint16_t c)
 {
 	hashvalue_type h;
 	struct query_info k;
-	rrset_cache_remove(worker->env.rrset_cache, nm, nmlen, t, c, 0);
+	rrset_cache_remove(v->rrset_cache, nm, nmlen, t, c, 0);
 	if(t == LDNS_RR_TYPE_SOA)
-		rrset_cache_remove(worker->env.rrset_cache, nm, nmlen, t, c,
+		rrset_cache_remove(v->rrset_cache, nm, nmlen, t, c,
 			PACKED_RRSET_SOA_NEG);
 	k.qname = nm;
 	k.qname_len = nmlen;
@@ -1550,37 +1833,46 @@ do_cache_remove(struct worker* worker, uint8_t* nm, size_t nmlen,
 	k.qclass = c;
 	k.local_alias = NULL;
 	h = query_info_hash(&k, 0);
-	slabhash_remove(worker->env.msg_cache, h, &k);
+	slabhash_remove(v->msg_cache, h, &k);
 	if(t == LDNS_RR_TYPE_AAAA) {
 		/* for AAAA also flush dns64 bit_cd packet */
 		h = query_info_hash(&k, BIT_CD);
-		slabhash_remove(worker->env.msg_cache, h, &k);
+		slabhash_remove(v->msg_cache, h, &k);
 	}
 }
 
 /** flush a type */
 static void
-do_flush_type(RES* ssl, struct worker* worker, char* arg)
+do_flush_type(RES* ssl,
+              struct worker* worker,
+              struct view* v,
+              char* argp)
 {
-	uint8_t* nm;
-	int nmlabs;
-	size_t nmlen;
-	char* arg2;
-	uint16_t t;
-	if(!find_arg2(ssl, arg, &arg2))
-		return;
-	if(!parse_arg_name(ssl, arg, &nm, &nmlen, &nmlabs))
-		return;
-	t = sldns_get_rr_type_by_name(arg2);
-	do_cache_remove(worker, nm, nmlen, t, LDNS_RR_CLASS_IN);
-	
-	free(nm);
-	send_ok(ssl);
+	if (view_has_caches(ssl, v)) {
+		size_t nmlen;
+		uint8_t* nm;
+		int nmlabs;
+		uint16_t t;
+		char* arg2;
+
+		if(!find_arg2(ssl, argp, &arg2))
+			return;
+		if(!parse_arg_name(ssl, argp, &nm, &nmlen, &nmlabs))
+			return;
+		t = sldns_get_rr_type_by_name(arg2);
+		do_cache_remove(v, nm, nmlen, t, LDNS_RR_CLASS_IN);
+		
+		free(nm);
+		send_ok(ssl);
+	}
 }
 
 /** flush statistics */
 static void
-do_flush_stats(RES* ssl, struct worker* worker)
+do_flush_stats(RES* ssl,
+               struct worker* worker,
+               struct view* v,
+               char* argp)
 {
 	worker_stats_clear(worker);
 	send_ok(ssl);
@@ -1590,8 +1882,6 @@ do_flush_stats(RES* ssl, struct worker* worker)
  * Local info for deletion functions
  */
 struct del_info {
-	/** worker */
-	struct worker* worker;
 	/** name to delete */
 	uint8_t* name;
 	/** length */
@@ -1635,23 +1925,29 @@ infra_del_host(struct lruhash_entry* e, void* arg)
 
 /** flush infra cache */
 static void
-do_flush_infra(RES* ssl, struct worker* worker, char* arg)
+do_flush_infra(RES* ssl,
+               struct worker* worker,
+               struct view* v,
+               char* argp)
 {
+	if (!view_is_valid(ssl, v)) {
+		return;
+	}
+
 	struct sockaddr_storage addr;
 	socklen_t len;
 	struct del_info inf;
-	if(strcmp(arg, "all") == 0) {
+	if(strcmp(argp, "all") == 0) {
 		slabhash_clear(worker->env.infra_cache->hosts);
 		send_ok(ssl);
 		return;
 	}
-	if(!ipstrtoaddr(arg, UNBOUND_DNS_PORT, &addr, &len)) {
-		(void)ssl_printf(ssl, "error parsing ip addr: '%s'\n", arg);
+	if(!ipstrtoaddr(argp, UNBOUND_DNS_PORT, &addr, &len)) {
+		(void)ssl_printf(ssl, "error parsing ip addr: '%s'\n", argp);
 		return;
 	}
 	/* delete all entries from cache */
 	/* what we do is to set them all expired */
-	inf.worker = worker;
 	inf.name = 0;
 	inf.len = 0;
 	inf.labs = 0;
@@ -1669,10 +1965,15 @@ do_flush_infra(RES* ssl, struct worker* worker, char* arg)
 
 /** flush requestlist */
 static void
-do_flush_requestlist(RES* ssl, struct worker* worker)
+do_flush_requestlist(RES* ssl,
+                     struct worker* worker,
+                     struct view* v,
+                     char* argp)
 {
-	mesh_delete_all(worker->env.mesh);
-	send_ok(ssl);
+	if (view_is_valid(ssl, v)) {
+		mesh_delete_all(worker->env.mesh);
+		send_ok(ssl);
+	}
 }
 
 /** callback to delete rrsets in a zone */
@@ -1728,17 +2029,23 @@ zone_del_kcache(struct lruhash_entry* e, void* arg)
 
 /** remove all rrsets and keys from zone from cache */
 static void
-do_flush_zone(RES* ssl, struct worker* worker, char* arg)
+do_flush_zone(RES* ssl,
+              struct worker* worker,
+              struct view* v,
+              char* argp)
 {
+	if (!view_has_caches(ssl, v)) {
+		return;
+	}
+
 	uint8_t* nm;
 	int nmlabs;
 	size_t nmlen;
 	struct del_info inf;
-	if(!parse_arg_name(ssl, arg, &nm, &nmlen, &nmlabs))
+	if(!parse_arg_name(ssl, argp, &nm, &nmlen, &nmlabs))
 		return;
 	/* delete all RRs and key entries from zone */
 	/* what we do is to set them all expired */
-	inf.worker = worker;
 	inf.name = nm;
 	inf.len = nmlen;
 	inf.labs = nmlabs;
@@ -1747,15 +2054,16 @@ do_flush_zone(RES* ssl, struct worker* worker, char* arg)
 	inf.num_rrsets = 0;
 	inf.num_msgs = 0;
 	inf.num_keys = 0;
-	slabhash_traverse(&worker->env.rrset_cache->table, 1, 
-		&zone_del_rrset, &inf);
 
-	slabhash_traverse(worker->env.msg_cache, 1, &zone_del_msg, &inf);
+	slabhash_traverse(&v->rrset_cache->table, 1, &zone_del_rrset, &inf);
+	slabhash_traverse(v->msg_cache, 1, &zone_del_msg, &inf);
 
-	/* and validator cache */
-	if(worker->env.key_cache) {
-		slabhash_traverse(worker->env.key_cache->slab, 1, 
-			&zone_del_kcache, &inf);
+	/* and validator cache, if not in a view */
+	if(view_is_server(v) && worker->env.key_cache) {
+		slabhash_traverse(worker->env.key_cache->slab,
+		                  1, 
+		                  &zone_del_kcache,
+	                      &inf);
 	}
 
 	free(nm);
@@ -1806,23 +2114,28 @@ bogus_del_kcache(struct lruhash_entry* e, void* arg)
 
 /** remove all bogus rrsets, msgs and keys from cache */
 static void
-do_flush_bogus(RES* ssl, struct worker* worker)
+do_flush_bogus(RES* ssl,
+               struct worker* worker,
+               struct view* v,
+               char* argp)
 {
+	if (!view_has_caches(ssl, v)) {
+		return;
+	}
+
 	struct del_info inf;
 	/* what we do is to set them all expired */
-	inf.worker = worker;
 	inf.expired = *worker->env.now;
 	inf.expired -= 3; /* handle 3 seconds skew between threads */
 	inf.num_rrsets = 0;
 	inf.num_msgs = 0;
 	inf.num_keys = 0;
-	slabhash_traverse(&worker->env.rrset_cache->table, 1, 
-		&bogus_del_rrset, &inf);
 
-	slabhash_traverse(worker->env.msg_cache, 1, &bogus_del_msg, &inf);
+	slabhash_traverse(&v->rrset_cache->table, 1, &bogus_del_rrset, &inf);
+	slabhash_traverse(v->msg_cache, 1, &bogus_del_msg, &inf);
 
 	/* and validator cache */
-	if(worker->env.key_cache) {
+	if(view_is_server(v) && worker->env.key_cache) {
 		slabhash_traverse(worker->env.key_cache->slab, 1, 
 			&bogus_del_kcache, &inf);
 	}
@@ -1881,23 +2194,29 @@ negative_del_kcache(struct lruhash_entry* e, void* arg)
 
 /** remove all negative(NODATA,NXDOMAIN), and servfail messages from cache */
 static void
-do_flush_negative(RES* ssl, struct worker* worker)
+do_flush_negative(RES* ssl,
+                  struct worker* worker,
+                  struct view* v,
+                  char* argp)
 {
 	struct del_info inf;
+
+	if (!view_has_caches(ssl, v)) {
+		return;
+	}
+
 	/* what we do is to set them all expired */
-	inf.worker = worker;
 	inf.expired = *worker->env.now;
 	inf.expired -= 3; /* handle 3 seconds skew between threads */
 	inf.num_rrsets = 0;
 	inf.num_msgs = 0;
 	inf.num_keys = 0;
-	slabhash_traverse(&worker->env.rrset_cache->table, 1, 
-		&negative_del_rrset, &inf);
 
-	slabhash_traverse(worker->env.msg_cache, 1, &negative_del_msg, &inf);
+	slabhash_traverse(&v->rrset_cache->table, 1, &negative_del_rrset, &inf);
+	slabhash_traverse(v->msg_cache, 1, &negative_del_msg, &inf);
 
 	/* and validator cache */
-	if(worker->env.key_cache) {
+	if(view_is_server(v) && worker->env.key_cache) {
 		slabhash_traverse(worker->env.key_cache->slab, 1, 
 			&negative_del_kcache, &inf);
 	}
@@ -1909,24 +2228,26 @@ do_flush_negative(RES* ssl, struct worker* worker)
 
 /** remove name rrset from cache */
 static void
-do_flush_name(RES* ssl, struct worker* w, char* arg)
+do_flush_name(RES* ssl,
+              struct worker* worker,
+              struct view* v,
+              char* argp)
 {
 	uint8_t* nm;
 	int nmlabs;
 	size_t nmlen;
-	if(!parse_arg_name(ssl, arg, &nm, &nmlen, &nmlabs))
+	if(!parse_arg_name(ssl, argp, &nm, &nmlen, &nmlabs))
 		return;
-	do_cache_remove(w, nm, nmlen, LDNS_RR_TYPE_A, LDNS_RR_CLASS_IN);
-	do_cache_remove(w, nm, nmlen, LDNS_RR_TYPE_AAAA, LDNS_RR_CLASS_IN);
-	do_cache_remove(w, nm, nmlen, LDNS_RR_TYPE_NS, LDNS_RR_CLASS_IN);
-	do_cache_remove(w, nm, nmlen, LDNS_RR_TYPE_SOA, LDNS_RR_CLASS_IN);
-	do_cache_remove(w, nm, nmlen, LDNS_RR_TYPE_CNAME, LDNS_RR_CLASS_IN);
-	do_cache_remove(w, nm, nmlen, LDNS_RR_TYPE_DNAME, LDNS_RR_CLASS_IN);
-	do_cache_remove(w, nm, nmlen, LDNS_RR_TYPE_MX, LDNS_RR_CLASS_IN);
-	do_cache_remove(w, nm, nmlen, LDNS_RR_TYPE_PTR, LDNS_RR_CLASS_IN);
-	do_cache_remove(w, nm, nmlen, LDNS_RR_TYPE_SRV, LDNS_RR_CLASS_IN);
-	do_cache_remove(w, nm, nmlen, LDNS_RR_TYPE_NAPTR, LDNS_RR_CLASS_IN);
-	
+	do_cache_remove(v, nm, nmlen, LDNS_RR_TYPE_A, LDNS_RR_CLASS_IN);
+	do_cache_remove(v, nm, nmlen, LDNS_RR_TYPE_AAAA, LDNS_RR_CLASS_IN);
+	do_cache_remove(v, nm, nmlen, LDNS_RR_TYPE_NS, LDNS_RR_CLASS_IN);
+	do_cache_remove(v, nm, nmlen, LDNS_RR_TYPE_SOA, LDNS_RR_CLASS_IN);
+	do_cache_remove(v, nm, nmlen, LDNS_RR_TYPE_CNAME, LDNS_RR_CLASS_IN);
+	do_cache_remove(v, nm, nmlen, LDNS_RR_TYPE_DNAME, LDNS_RR_CLASS_IN);
+	do_cache_remove(v, nm, nmlen, LDNS_RR_TYPE_MX, LDNS_RR_CLASS_IN);
+	do_cache_remove(v, nm, nmlen, LDNS_RR_TYPE_PTR, LDNS_RR_CLASS_IN);
+	do_cache_remove(v, nm, nmlen, LDNS_RR_TYPE_SRV, LDNS_RR_CLASS_IN);
+	do_cache_remove(v, nm, nmlen, LDNS_RR_TYPE_NAPTR, LDNS_RR_CLASS_IN);
 	free(nm);
 	send_ok(ssl);
 }
@@ -2046,194 +2367,21 @@ parse_delegpt(RES* ssl, char* args, uint8_t* nm, int allow_names)
 	return dp;
 }
 
-/** do the status command */
-static void
-do_forward(RES* ssl, struct worker* worker, char* args)
-{
-	struct iter_forwards* fwd = worker->env.fwds;
-	uint8_t* root = (uint8_t*)"\000";
-	if(!fwd) {
-		(void)ssl_printf(ssl, "error: structure not allocated\n");
-		return;
-	}
-	if(args == NULL || args[0] == 0) {
-		(void)print_root_fwds(ssl, fwd, root);
-		return;
-	}
-	/* set root forwards for this thread. since we are in remote control
-	 * the actual mesh is not running, so we can freely edit it. */
-	/* delete all the existing queries first */
-	mesh_delete_all(worker->env.mesh);
-	if(strcmp(args, "off") == 0) {
-		forwards_delete_zone(fwd, LDNS_RR_CLASS_IN, root);
-	} else {
-		struct delegpt* dp;
-		if(!(dp = parse_delegpt(ssl, args, root, 0)))
-			return;
-		if(!forwards_add_zone(fwd, LDNS_RR_CLASS_IN, dp)) {
-			(void)ssl_printf(ssl, "error out of memory\n");
-			return;
-		}
-	}
-	send_ok(ssl);
-}
-
-static int
-parse_fs_args(RES* ssl, char* args, uint8_t** nm, struct delegpt** dp,
-	int* insecure, int* prime)
-{
-	char* zonename;
-	char* rest;
-	size_t nmlen;
-	int nmlabs;
-	/* parse all -x args */
-	while(args[0] == '+') {
-		if(!find_arg2(ssl, args, &rest))
-			return 0;
-		while(*(++args) != 0) {
-			if(*args == 'i' && insecure)
-				*insecure = 1;
-			else if(*args == 'p' && prime)
-				*prime = 1;
-			else {
-				(void)ssl_printf(ssl, "error: unknown option %s\n", args);
-				return 0;
-			}
-		}
-		args = rest;
-	}
-	/* parse name */
-	if(dp) {
-		if(!find_arg2(ssl, args, &rest))
-			return 0;
-		zonename = args;
-		args = rest;
-	} else	zonename = args;
-	if(!parse_arg_name(ssl, zonename, nm, &nmlen, &nmlabs))
-		return 0;
-
-	/* parse dp */
-	if(dp) {
-		if(!(*dp = parse_delegpt(ssl, args, *nm, 1))) {
-			free(*nm);
-			return 0;
-		}
-	}
-	return 1;
-}
-
-/** do the forward_add command */
-static void
-do_forward_add(RES* ssl, struct worker* worker, char* args)
-{
-	struct iter_forwards* fwd = worker->env.fwds;
-	int insecure = 0;
-	uint8_t* nm = NULL;
-	struct delegpt* dp = NULL;
-	if(!parse_fs_args(ssl, args, &nm, &dp, &insecure, NULL))
-		return;
-	if(insecure && worker->env.anchors) {
-		if(!anchors_add_insecure(worker->env.anchors, LDNS_RR_CLASS_IN,
-			nm)) {
-			(void)ssl_printf(ssl, "error out of memory\n");
-			delegpt_free_mlc(dp);
-			free(nm);
-			return;
-		}
-	}
-	if(!forwards_add_zone(fwd, LDNS_RR_CLASS_IN, dp)) {
-		(void)ssl_printf(ssl, "error out of memory\n");
-		free(nm);
-		return;
-	}
-	free(nm);
-	send_ok(ssl);
-}
-
-/** do the forward_remove command */
-static void
-do_forward_remove(RES* ssl, struct worker* worker, char* args)
-{
-	struct iter_forwards* fwd = worker->env.fwds;
-	int insecure = 0;
-	uint8_t* nm = NULL;
-	if(!parse_fs_args(ssl, args, &nm, NULL, &insecure, NULL))
-		return;
-	if(insecure && worker->env.anchors)
-		anchors_delete_insecure(worker->env.anchors, LDNS_RR_CLASS_IN,
-			nm);
-	forwards_delete_zone(fwd, LDNS_RR_CLASS_IN, nm);
-	free(nm);
-	send_ok(ssl);
-}
-
-/** do the stub_add command */
-static void
-do_stub_add(RES* ssl, struct worker* worker, char* args)
-{
-	struct iter_forwards* fwd = worker->env.fwds;
-	int insecure = 0, prime = 0;
-	uint8_t* nm = NULL;
-	struct delegpt* dp = NULL;
-	if(!parse_fs_args(ssl, args, &nm, &dp, &insecure, &prime))
-		return;
-	if(insecure && worker->env.anchors) {
-		if(!anchors_add_insecure(worker->env.anchors, LDNS_RR_CLASS_IN,
-			nm)) {
-			(void)ssl_printf(ssl, "error out of memory\n");
-			delegpt_free_mlc(dp);
-			free(nm);
-			return;
-		}
-	}
-	if(!forwards_add_stub_hole(fwd, LDNS_RR_CLASS_IN, nm)) {
-		if(insecure && worker->env.anchors)
-			anchors_delete_insecure(worker->env.anchors,
-				LDNS_RR_CLASS_IN, nm);
-		(void)ssl_printf(ssl, "error out of memory\n");
-		delegpt_free_mlc(dp);
-		free(nm);
-		return;
-	}
-	if(!hints_add_stub(worker->env.hints, LDNS_RR_CLASS_IN, dp, !prime)) {
-		(void)ssl_printf(ssl, "error out of memory\n");
-		forwards_delete_stub_hole(fwd, LDNS_RR_CLASS_IN, nm);
-		if(insecure && worker->env.anchors)
-			anchors_delete_insecure(worker->env.anchors,
-				LDNS_RR_CLASS_IN, nm);
-		free(nm);
-		return;
-	}
-	free(nm);
-	send_ok(ssl);
-}
-
-/** do the stub_remove command */
-static void
-do_stub_remove(RES* ssl, struct worker* worker, char* args)
-{
-	struct iter_forwards* fwd = worker->env.fwds;
-	int insecure = 0;
-	uint8_t* nm = NULL;
-	if(!parse_fs_args(ssl, args, &nm, NULL, &insecure, NULL))
-		return;
-	if(insecure && worker->env.anchors)
-		anchors_delete_insecure(worker->env.anchors, LDNS_RR_CLASS_IN,
-			nm);
-	forwards_delete_stub_hole(fwd, LDNS_RR_CLASS_IN, nm);
-	hints_delete_stub(worker->env.hints, LDNS_RR_CLASS_IN, nm);
-	free(nm);
-	send_ok(ssl);
-}
-
 /** do the insecure_add command */
 static void
-do_insecure_add(RES* ssl, struct worker* worker, char* arg)
+do_insecure_add(RES* ssl,
+                struct worker* worker,
+                struct view* v,
+                char* argp)
 {
+	if (!view_is_valid(ssl, v)) {
+		return;
+	}
+
 	size_t nmlen;
 	int nmlabs;
 	uint8_t* nm = NULL;
-	if(!parse_arg_name(ssl, arg, &nm, &nmlen, &nmlabs))
+	if(!parse_arg_name(ssl, argp, &nm, &nmlen, &nmlabs))
 		return;
 	if(worker->env.anchors) {
 		if(!anchors_add_insecure(worker->env.anchors,
@@ -2249,12 +2397,19 @@ do_insecure_add(RES* ssl, struct worker* worker, char* arg)
 
 /** do the insecure_remove command */
 static void
-do_insecure_remove(RES* ssl, struct worker* worker, char* arg)
+do_insecure_remove(RES* ssl,
+                   struct worker* worker,
+                   struct view* v,
+                   char* argp)
 {
+	if (!view_is_valid(ssl, v)) {
+		return;
+	}
+
 	size_t nmlen;
 	int nmlabs;
 	uint8_t* nm = NULL;
-	if(!parse_arg_name(ssl, arg, &nm, &nmlen, &nmlabs))
+	if(!parse_arg_name(ssl, argp, &nm, &nmlen, &nmlabs))
 		return;
 	if(worker->env.anchors)
 		anchors_delete_insecure(worker->env.anchors,
@@ -2264,8 +2419,15 @@ do_insecure_remove(RES* ssl, struct worker* worker, char* arg)
 }
 
 static void
-do_insecure_list(RES* ssl, struct worker* worker)
+do_insecure_list(RES* ssl,
+                 struct worker* worker,
+                 struct view* v,
+                 char* argp)
 {
+	if (!view_is_valid(ssl, v)) {
+		return;
+	}
+
 	char buf[257];
 	struct trust_anchor* a;
 	if(worker->env.anchors) {
@@ -2280,8 +2442,15 @@ do_insecure_list(RES* ssl, struct worker* worker)
 
 /** do the status command */
 static void
-do_status(RES* ssl, struct worker* worker)
+do_status(RES* ssl,
+          struct worker* worker,
+          struct view* v,
+          char* argp)
 {
+	if (!view_is_valid(ssl, v)) {
+		return;
+	}
+
 	int i;
 	time_t uptime;
 	if(!ssl_printf(ssl, "version: %s\n", PACKAGE_VERSION))
@@ -2388,8 +2557,15 @@ get_mesh_status(struct mesh_area* mesh, struct mesh_state* m,
 
 /** do the dump_requestlist command */
 static void
-do_dump_requestlist(RES* ssl, struct worker* worker)
+do_dump_requestlist(RES* ssl,
+                    struct worker* worker,
+                    struct view* v,
+                    char* argp)
 {
+	if (!view_is_valid(ssl, v)) {
+		return;
+	}
+
 	struct mesh_area* mesh;
 	struct mesh_state* m;
 	int num = 0;
@@ -2482,9 +2658,17 @@ dump_infra_host(struct lruhash_entry* e, void* arg)
 
 /** do the dump_infra command */
 static void
-do_dump_infra(RES* ssl, struct worker* worker)
+do_dump_infra(RES* ssl,
+              struct worker* worker,
+              struct view* v,
+              char* argp)
 {
+	if (!view_is_valid(ssl, v)) {
+		return;
+	}
+
 	struct infra_arg arg;
+
 	arg.infra = worker->env.infra_cache;
 	arg.ssl = ssl;
 	arg.now = *worker->env.now;
@@ -2494,23 +2678,37 @@ do_dump_infra(RES* ssl, struct worker* worker)
 
 /** do the log_reopen command */
 static void
-do_log_reopen(RES* ssl, struct worker* worker)
+do_log_reopen(RES* ssl,
+              struct worker* worker,
+              struct view* v,
+              char* argp)
 {
-	struct config_file* cfg = worker->env.cfg;
-	send_ok(ssl);
-	log_init(cfg->logfile, cfg->use_syslog, cfg->chrootdir);
+	if (view_is_valid(ssl, v)) {
+		send_ok(ssl);
+
+		struct config_file* cfg = worker->env.cfg;
+
+		log_init(cfg->logfile, cfg->use_syslog, cfg->chrootdir);
+	}
 }
 
 /** do the auth_zone_reload command */
 static void
-do_auth_zone_reload(RES* ssl, struct worker* worker, char* arg)
+do_auth_zone_reload(RES* ssl,
+                    struct worker* worker,
+                    struct view* v,
+                    char* argp)
 {
+	if (!view_is_valid(ssl, v)) {
+		return;
+	}
+
 	size_t nmlen;
 	int nmlabs;
 	uint8_t* nm = NULL;
 	struct auth_zones* az = worker->env.auth_zones;
 	struct auth_zone* z = NULL;
-	if(!parse_arg_name(ssl, arg, &nm, &nmlen, &nmlabs))
+	if(!parse_arg_name(ssl, argp, &nm, &nmlen, &nmlabs))
 		return;
 	if(az) {
 		lock_rw_rdlock(&az->lock);
@@ -2522,12 +2720,12 @@ do_auth_zone_reload(RES* ssl, struct worker* worker, char* arg)
 	}
 	free(nm);
 	if(!z) {
-		(void)ssl_printf(ssl, "error no auth-zone %s\n", arg);
+		(void)ssl_printf(ssl, "error no auth-zone %s\n", argp);
 		return;
 	}
 	if(!auth_zone_read_zonefile(z, worker->env.cfg)) {
 		lock_rw_unlock(&z->lock);
-		(void)ssl_printf(ssl, "error failed to read %s\n", arg);
+		(void)ssl_printf(ssl, "error failed to read %s\n", argp);
 		return;
 	}
 	lock_rw_unlock(&z->lock);
@@ -2536,17 +2734,24 @@ do_auth_zone_reload(RES* ssl, struct worker* worker, char* arg)
 
 /** do the auth_zone_transfer command */
 static void
-do_auth_zone_transfer(RES* ssl, struct worker* worker, char* arg)
+do_auth_zone_transfer(RES* ssl,
+                      struct worker* worker,
+                      struct view* v,
+                      char* argp)
 {
+	if (!view_is_valid(ssl, v)) {
+		return;
+	}
+
 	size_t nmlen;
 	int nmlabs;
 	uint8_t* nm = NULL;
 	struct auth_zones* az = worker->env.auth_zones;
-	if(!parse_arg_name(ssl, arg, &nm, &nmlen, &nmlabs))
+	if(!parse_arg_name(ssl, argp, &nm, &nmlen, &nmlabs))
 		return;
 	if(!az || !auth_zones_startprobesequence(az, &worker->env, nm, nmlen,
 		LDNS_RR_CLASS_IN)) {
-		(void)ssl_printf(ssl, "error zone xfr task not found %s\n", arg);
+		(void)ssl_printf(ssl, "error zone xfr task not found %s\n", argp);
 		free(nm);
 		return;
 	}
@@ -2556,17 +2761,24 @@ do_auth_zone_transfer(RES* ssl, struct worker* worker, char* arg)
 	
 /** do the set_option command */
 static void
-do_set_option(RES* ssl, struct worker* worker, char* arg)
+do_set_option(RES* ssl,
+              struct worker* worker,
+              struct view* v,
+              char* argp)
 {
-	char* arg2;
-	if(!find_arg2(ssl, arg, &arg2))
+	if (!view_is_valid(ssl, v)) {
 		return;
-	if(!config_set_option(worker->env.cfg, arg, arg2)) {
+	}
+
+	char* arg2;
+	if(!find_arg2(ssl, argp, &arg2))
+		return;
+	if(!config_set_option(worker->env.cfg, argp, arg2)) {
 		(void)ssl_printf(ssl, "error setting option\n");
 		return;
 	}
 	/* effectuate some arguments */
-	if(strcmp(arg, "val-override-date:") == 0) {
+	if(strcmp(argp, "val-override-date:") == 0) {
 		int m = modstack_find(&worker->env.mesh->mods, "validator");
 		struct val_env* val_env = NULL;
 		if(m != -1) val_env = (struct val_env*)worker->env.modinfo[m];
@@ -2585,61 +2797,98 @@ void remote_get_opt_ssl(char* line, void* arg)
 
 /** do the get_option command */
 static void
-do_get_option(RES* ssl, struct worker* worker, char* arg)
+do_get_option(RES* ssl,
+              struct worker* worker,
+              struct view* v,
+              char* argp)
 {
-	int r;
-	r = config_get_option(worker->env.cfg, arg, remote_get_opt_ssl, ssl);
-	if(!r) {
-		(void)ssl_printf(ssl, "error unknown option\n");
-		return;
+	if (view_is_valid(ssl, v)) {
+		int r = config_get_option(worker->env.cfg,
+		                          argp,
+		                          remote_get_opt_ssl,
+		                          ssl);
+
+		if (r == 0) {
+			(void)ssl_printf(ssl, "error unknown option\n");
+			return;
+		}
 	}
 }
 
 /** do the list_forwards command */
 static void
-do_list_forwards(RES* ssl, struct worker* worker)
+do_list_forwards(RES* ssl,
+                 struct worker* worker,
+                 struct view* v,
+                 char* argp)
 {
-	/* since its a per-worker structure no locks needed */
-	struct iter_forwards* fwds = worker->env.fwds;
+	if (!view_has_forwards(ssl, v)) {
+		return;
+	}
+
+	struct val_anchors *val = view_is_server(v) ? worker->env.anchors : NULL;
+	struct iter_forwards* fwds = v->fwds;
 	struct iter_forward_zone* z;
 	struct trust_anchor* a;
 	int insecure;
+
+	lock_rw_rdlock(&v->lock);
+
 	RBTREE_FOR(z, struct iter_forward_zone*, fwds->tree) {
 		if(!z->dp) continue; /* skip empty marker for stub */
 
 		/* see if it is insecure */
 		insecure = 0;
-		if(worker->env.anchors &&
-			(a=anchor_find(worker->env.anchors, z->name,
-			z->namelabs, z->namelen,  z->dclass))) {
-			if(!a->keylist && !a->numDS && !a->numDNSKEY)
+
+		if (val != NULL &&
+			(a = anchor_find(val, z->name,
+		                          z->namelabs, z->namelen,
+		                          z->dclass))) {
+			if (!a->keylist && !a->numDS && !a->numDNSKEY) {
 				insecure = 1;
+			}
+
 			lock_basic_unlock(&a->lock);
 		}
-
 		if(!ssl_print_name_dp(ssl, (insecure?"forward +i":"forward"),
 			z->name, z->dclass, z->dp))
-			return;
+			break;
 	}
+
+	lock_rw_rdlock(&v->lock);
 }
 
 /** do the list_stubs command */
 static void
-do_list_stubs(RES* ssl, struct worker* worker)
+do_list_stubs(RES* ssl,
+              struct worker* worker,
+              struct view* v,
+              char* argp)
 {
+	if (!view_has_hints(ssl, v)) {
+		return;
+	}
+
+	struct val_anchors *val = view_is_server(v) ? worker->env.anchors : NULL;
 	struct iter_hints_stub* z;
 	struct trust_anchor* a;
 	int insecure;
 	char str[32];
-	RBTREE_FOR(z, struct iter_hints_stub*, &worker->env.hints->tree) {
 
+	lock_rw_rdlock(&v->lock);
+
+	RBTREE_FOR(z, struct iter_hints_stub*, &v->hints->tree) {
 		/* see if it is insecure */
 		insecure = 0;
-		if(worker->env.anchors &&
-			(a=anchor_find(worker->env.anchors, z->node.name,
-			z->node.labs, z->node.len,  z->node.dclass))) {
-			if(!a->keylist && !a->numDS && !a->numDNSKEY)
+
+		if (val != NULL &&
+			(a = anchor_find(val, z->node.name,
+		                          z->node.labs, z->node.len,
+		                          z->node.dclass))) {
+			if (!a->keylist && !a->numDS && !a->numDNSKEY) {
 				insecure = 1;
+			}
+
 			lock_basic_unlock(&a->lock);
 		}
 
@@ -2647,14 +2896,24 @@ do_list_stubs(RES* ssl, struct worker* worker)
 			(z->noprime?"no":""), (insecure?" +i":""));
 		if(!ssl_print_name_dp(ssl, str, z->node.name,
 			z->node.dclass, z->dp))
-			return;
+			break;
 	}
+
+	lock_rw_unlock(&v->lock);
 }
 
 /** do the list_auth_zones command */
 static void
-do_list_auth_zones(RES* ssl, struct auth_zones* az)
+do_list_auth_zones(RES* ssl,
+                   struct worker* worker,
+                   struct view* v,
+                   char* argp)
 {
+	if (!view_is_valid(ssl, v)) {
+		return;
+	}
+
+	struct auth_zones* az = worker->env.auth_zones;
 	struct auth_zone* z;
 	char buf[257], buf2[256];
 	lock_rw_rdlock(&az->lock);
@@ -2681,9 +2940,8 @@ do_list_auth_zones(RES* ssl, struct auth_zones* az)
 	lock_rw_unlock(&az->lock);
 }
 
-/** do the list_local_zones command */
 static void
-do_list_local_zones(RES* ssl, struct local_zones* zones)
+list_local_zones(RES* ssl, struct local_zones* zones)
 {
 	struct local_zone* z;
 	char buf[257];
@@ -2703,9 +2961,36 @@ do_list_local_zones(RES* ssl, struct local_zones* zones)
 	lock_rw_unlock(&zones->lock);
 }
 
-/** do the list_local_data command */
+/** do the list_local_zones command */
 static void
-do_list_local_data(RES* ssl, struct worker* worker, struct local_zones* zones)
+do_list_local_zones(RES* ssl,
+                    struct worker* worker,
+                    struct view* v,
+                    char* argp)
+{
+	lock_rw_rdlock(&v->lock);
+
+	if (v->local_zones != NULL) {
+		list_local_zones(ssl, v->local_zones);
+	}
+
+	lock_rw_unlock(&v->lock);
+}
+
+/** do the view_list_local_zones command */
+static void
+do_view_list_local_zones(RES* ssl,
+                         struct worker* worker,
+                         struct view* v,
+                         char* argp)
+{
+	if ((v = check_view_arg(ssl, worker, v, &argp)) != NULL) {
+		do_list_local_zones(ssl, worker, v, argp);
+	}
+}
+
+static void
+list_local_data(RES* ssl, struct worker* worker, struct local_zones* zones)
 {
 	struct local_zone* z;
 	struct local_data* d;
@@ -2742,36 +3027,47 @@ do_list_local_data(RES* ssl, struct worker* worker, struct local_zones* zones)
 	lock_rw_unlock(&zones->lock);
 }
 
-/** do the view_list_local_zones command */
+/** do the list_local_data command */
 static void
-do_view_list_local_zones(RES* ssl, struct worker* worker, char* arg)
+do_list_local_data(RES* ssl,
+                   struct worker* worker,
+                   struct view* v,
+                   char* argp)
 {
-	struct view* v = views_find_view(worker->daemon->views,
-		arg, 0 /* get read lock*/);
-	if(!v) {
-		ssl_printf(ssl,"no view with name: %s\n", arg);
-		return;
+	lock_rw_rdlock(&v->lock);
+
+	if (v->local_zones != NULL) {
+		list_local_data(ssl, worker, v->local_zones);
 	}
-	if(v->local_zones) {
-		do_list_local_zones(ssl, v->local_zones);
-	}
+
 	lock_rw_unlock(&v->lock);
 }
-
+	
 /** do the view_list_local_data command */
 static void
-do_view_list_local_data(RES* ssl, struct worker* worker, char* arg)
+do_view_list_local_data(RES* ssl,
+                        struct worker* worker,
+                        struct view* v,
+                        char* argp)
 {
-	struct view* v = views_find_view(worker->daemon->views,
-		arg, 0 /* get read lock*/);
-	if(!v) {
-		ssl_printf(ssl,"no view with name: %s\n", arg);
-		return;
+	if ((v = check_view_arg(ssl, worker, v, &argp)) != NULL) {
+		do_list_local_data(ssl, worker, v, argp);
 	}
-	if(v->local_zones) {
-		do_list_local_data(ssl, worker, v->local_zones);
+}
+
+static void
+do_list_views(RES* ssl,
+              struct worker* worker,
+              struct view* v,
+              char* argp)
+{
+	if (view_is_valid(ssl, v)) {
+		struct view_node *vn;
+
+		RBTREE_FOR(vn, struct view_node *, &worker->daemon->views->vtree) {
+			ssl_printf(ssl, "%s\n", vn->vinfo.name);
+		}
 	}
-	lock_rw_unlock(&v->lock);
 }
 
 /** struct for user arg ratelimit list */
@@ -2826,15 +3122,22 @@ ip_rate_list(struct lruhash_entry* e, void* arg)
 
 /** do the ratelimit_list command */
 static void
-do_ratelimit_list(RES* ssl, struct worker* worker, char* arg)
+do_ratelimit_list(RES* ssl,
+                  struct worker* worker,
+                  struct view* v,
+                  char* argp)
 {
+	if (!view_is_valid(ssl, v)) {
+		return;
+	}
+
 	struct ratelimit_list_arg a;
 	a.all = 0;
 	a.infra = worker->env.infra_cache;
 	a.now = *worker->env.now;
 	a.ssl = ssl;
-	arg = skipwhite(arg);
-	if(strcmp(arg, "+a") == 0)
+	argp = skipwhite(argp);
+	if(strcmp(argp, "+a") == 0)
 		a.all = 1;
 	if(a.infra->domain_rates==NULL ||
 		(a.all == 0 && infra_dp_ratelimit == 0))
@@ -2844,15 +3147,22 @@ do_ratelimit_list(RES* ssl, struct worker* worker, char* arg)
 
 /** do the ip_ratelimit_list command */
 static void
-do_ip_ratelimit_list(RES* ssl, struct worker* worker, char* arg)
+do_ip_ratelimit_list(RES* ssl,
+                     struct worker* worker,
+                     struct view* v,
+                     char* argp)
 {
+	if (!view_is_valid(ssl, v)) {
+		return;
+	}
+
 	struct ip_ratelimit_list_arg a;
 	a.all = 0;
 	a.infra = worker->env.infra_cache;
 	a.now = *worker->env.now;
 	a.ssl = ssl;
-	arg = skipwhite(arg);
-	if(strcmp(arg, "+a") == 0)
+	argp = skipwhite(argp);
+	if(strcmp(argp, "+a") == 0)
 		a.all = 1;
 	if(a.infra->client_ip_rates==NULL ||
 		(a.all == 0 && infra_ip_ratelimit == 0))
@@ -2862,7 +3172,16 @@ do_ip_ratelimit_list(RES* ssl, struct worker* worker, char* arg)
 
 /** do the rpz_enable/disable command */
 static void
-do_rpz_enable_disable(RES* ssl, struct worker* worker, char* arg, int enable) {
+rpz_control(RES* ssl,
+            struct worker* worker,
+            struct view* v,
+            char* arg,
+            int enable)
+{
+	if (!view_is_valid(ssl, v)) {
+		return;
+	}
+
     size_t nmlen;
     int nmlabs;
     uint8_t *nm = NULL;
@@ -2899,18 +3218,47 @@ do_rpz_enable_disable(RES* ssl, struct worker* worker, char* arg, int enable) {
 
 /** do the rpz_enable command */
 static void
-do_rpz_enable(RES* ssl, struct worker* worker, char* arg)
+do_rpz_enable(RES* ssl,
+              struct worker* worker,
+              struct view* v,
+              char* argp)
 {
-    do_rpz_enable_disable(ssl, worker, arg, 1);
+    rpz_control(ssl, worker, v, argp, 1);
 }
 
 /** do the rpz_disable command */
 static void
-do_rpz_disable(RES* ssl, struct worker* worker, char* arg)
+do_rpz_disable(RES* ssl,
+               struct worker* worker,
+               struct view* v,
+               char* argp)
 {
-    do_rpz_enable_disable(ssl, worker, arg, 0);
+    rpz_control(ssl, worker, v, argp, 0);
 }
 
+/* basic connectivity test */
+static void
+do_echo(RES* ssl,
+        struct worker* worker,
+        struct view* v,
+        char* argp)
+{
+	ssl_printf(ssl, "echo");
+
+	if (!view_is_server(v)) {
+		ssl_printf(ssl, ".%s", v->name);
+	}
+
+	while (*argp != '\0') {
+		char *next;
+
+		find_arg2(ssl, argp, &next);
+		ssl_printf(ssl, " %s", argp);
+		argp = next;
+	}
+
+	ssl_printf(ssl, "\n");
+}
 /** tell other processes to execute the command */
 static void
 distribute_cmd(struct daemon_remote* rc, RES* ssl, char* cmd)
@@ -2930,194 +3278,108 @@ distribute_cmd(struct daemon_remote* rc, RES* ssl, char* cmd)
 	}
 }
 
-/** check for name with end-of-string, space or tab after it */
-static int
-cmdcmp(char* p, const char* cmd, size_t len)
+static void
+do_dump_cache(RES* ssl,
+              struct worker* worker,
+              struct view* v,
+              char* argp)
 {
-	return strncmp(p,cmd,len)==0 && (p[len]==0||p[len]==' '||p[len]=='\t');
+	if (view_has_caches(ssl, v)) {
+		dump_cache(ssl, worker, v);
+	}
 }
+
+static void
+do_load_cache(RES* ssl,
+              struct worker* worker,
+              struct view* v,
+              char* argp)
+{
+	if (view_is_valid(ssl, v)) {
+		if (load_cache(ssl, worker)) {
+			send_ok(ssl);
+		}
+	}
+}
+
+#include "remote-lookup.c"
 
 /** execute a remote control command */
 static void
-execute_cmd(struct daemon_remote* rc, RES* ssl, char* cmd, 
-	struct worker* worker)
+execute_cmd(struct daemon_remote* rc,
+            RES* ssl,
+            char* cmd,
+            struct worker* worker)
 {
 	char* p = skipwhite(cmd);
-	/* compare command */
-	if(cmdcmp(p, "stop", 4)) {
-		do_stop(ssl, worker);
-		return;
-	} else if(cmdcmp(p, "reload", 6)) {
-		do_reload(ssl, worker);
-		return;
-	} else if(cmdcmp(p, "stats_noreset", 13)) {
-		do_stats(ssl, worker, 0);
-		return;
-	} else if(cmdcmp(p, "stats", 5)) {
-		do_stats(ssl, worker, 1);
-		return;
-	} else if(cmdcmp(p, "status", 6)) {
-		do_status(ssl, worker);
-		return;
-	} else if(cmdcmp(p, "dump_cache", 10)) {
-		(void)dump_cache(ssl, worker);
-		return;
-	} else if(cmdcmp(p, "load_cache", 10)) {
-		if(load_cache(ssl, worker)) send_ok(ssl);
-		return;
-	} else if(cmdcmp(p, "list_forwards", 13)) {
-		do_list_forwards(ssl, worker);
-		return;
-	} else if(cmdcmp(p, "list_stubs", 10)) {
-		do_list_stubs(ssl, worker);
-		return;
-	} else if(cmdcmp(p, "list_insecure", 13)) {
-		do_insecure_list(ssl, worker);
-		return;
-	} else if(cmdcmp(p, "list_local_zones", 16)) {
-		do_list_local_zones(ssl, worker->daemon->local_zones);
-		return;
-	} else if(cmdcmp(p, "list_local_data", 15)) {
-		do_list_local_data(ssl, worker, worker->daemon->local_zones);
-		return;
-	} else if(cmdcmp(p, "view_list_local_zones", 21)) {
-		do_view_list_local_zones(ssl, worker, skipwhite(p+21));
-		return;
-	} else if(cmdcmp(p, "view_list_local_data", 20)) {
-		do_view_list_local_data(ssl, worker, skipwhite(p+20));
-		return;
-	} else if(cmdcmp(p, "ratelimit_list", 14)) {
-		do_ratelimit_list(ssl, worker, p+14);
-		return;
-	} else if(cmdcmp(p, "ip_ratelimit_list", 17)) {
-		do_ip_ratelimit_list(ssl, worker, p+17);
-		return;
-	} else if(cmdcmp(p, "list_auth_zones", 15)) {
-		do_list_auth_zones(ssl, worker->env.auth_zones);
-		return;
-	} else if(cmdcmp(p, "auth_zone_reload", 16)) {
-		do_auth_zone_reload(ssl, worker, skipwhite(p+16));
-		return;
-	} else if(cmdcmp(p, "auth_zone_transfer", 18)) {
-		do_auth_zone_transfer(ssl, worker, skipwhite(p+18));
-		return;
-	} else if(cmdcmp(p, "stub_add", 8)) {
-		/* must always distribute this cmd */
-		if(rc) distribute_cmd(rc, ssl, cmd);
-		do_stub_add(ssl, worker, skipwhite(p+8));
-		return;
-	} else if(cmdcmp(p, "stub_remove", 11)) {
-		/* must always distribute this cmd */
-		if(rc) distribute_cmd(rc, ssl, cmd);
-		do_stub_remove(ssl, worker, skipwhite(p+11));
-		return;
-	} else if(cmdcmp(p, "forward_add", 11)) {
-		/* must always distribute this cmd */
-		if(rc) distribute_cmd(rc, ssl, cmd);
-		do_forward_add(ssl, worker, skipwhite(p+11));
-		return;
-	} else if(cmdcmp(p, "forward_remove", 14)) {
-		/* must always distribute this cmd */
-		if(rc) distribute_cmd(rc, ssl, cmd);
-		do_forward_remove(ssl, worker, skipwhite(p+14));
-		return;
-	} else if(cmdcmp(p, "insecure_add", 12)) {
-		/* must always distribute this cmd */
-		if(rc) distribute_cmd(rc, ssl, cmd);
-		do_insecure_add(ssl, worker, skipwhite(p+12));
-		return;
-	} else if(cmdcmp(p, "insecure_remove", 15)) {
-		/* must always distribute this cmd */
-		if(rc) distribute_cmd(rc, ssl, cmd);
-		do_insecure_remove(ssl, worker, skipwhite(p+15));
-		return;
-	} else if(cmdcmp(p, "forward", 7)) {
-		/* must always distribute this cmd */
-		if(rc) distribute_cmd(rc, ssl, cmd);
-		do_forward(ssl, worker, skipwhite(p+7));
-		return;
-	} else if(cmdcmp(p, "flush_stats", 11)) {
-		/* must always distribute this cmd */
-		if(rc) distribute_cmd(rc, ssl, cmd);
-		do_flush_stats(ssl, worker);
-		return;
-	} else if(cmdcmp(p, "flush_requestlist", 17)) {
-		/* must always distribute this cmd */
-		if(rc) distribute_cmd(rc, ssl, cmd);
-		do_flush_requestlist(ssl, worker);
-		return;
-	} else if(cmdcmp(p, "lookup", 6)) {
-		do_lookup(ssl, worker, skipwhite(p+6));
-		return;
+	cmdHashType h = HASH_INIT;
+	char *cp = p, c;
+
+	// Skip to the next whitespace, '.'. or end of the string to compute
+	// both the length and the hash.
+
+	while ((c = *cp) != '\0' && c != ' ' && c != '\t' && c != '.') {
+		h = _hashFunc(h, c);
+		cp++;
 	}
 
-#ifdef THREADS_DISABLED
-	/* other processes must execute the command as well */
-	/* commands that should not be distributed, returned above. */
-	if(rc) { /* only if this thread is the master (rc) thread */
-		/* done before the code below, which may split the string */
-		distribute_cmd(rc, ssl, cmd);
+	size_t len;
+
+	if ((len = cp - p) > 0) {
+		struct view *v;
+
+		// Look to see if a view is specified
+
+		if (c != '.') {
+			v = &worker->daemon->views->server_view;
+		} else {
+			char *vn = ++cp;
+
+			while ((c = *cp) != '\0' && c != ' ' && c != '\t') {
+				cp++;
+			}
+	
+			if (c != '\0') {
+				*cp = '\0';
+			}
+			if ((v = views_find_view(worker->daemon->views, vn, 0)) == NULL) {
+				ssl_printf(ssl, "no view with name: %s\n", vn);
+				return;
+			}
+
+			// Restore the string and unlock the view
+
+			lock_rw_unlock(&v->lock);
+
+			if (c != '\0') {
+				*cp = c;
+			}
+		}
+
+		uint32_t hval = _hashFold(h);
+
+		cmdHash const *hp = cmdTable[HASH_TABLE_NDX(hval)];
+
+		while (hp != NULL) {
+			if (hp->hash == hval &&
+			    hp->len == len &&
+			        strncmp(p, hp->cmd, len) == 0) {
+				// If this command needs to be distributed, do so now
+				// before the service function can change the command line
+
+				if (rc != NULL && hp->dist) {
+					distribute_cmd(rc, ssl, cmd);
+				}
+
+				(*hp->fnc)(ssl, worker, v, skipwhite(cp));
+				return;
+			}
+
+			hp = hp->next;
+		}
 	}
-#endif
-	if(cmdcmp(p, "verbosity", 9)) {
-		do_verbosity(ssl, skipwhite(p+9));
-	} else if(cmdcmp(p, "local_zone_remove", 17)) {
-		do_zone_remove(ssl, worker->daemon->local_zones, skipwhite(p+17));
-	} else if(cmdcmp(p, "local_zones_remove", 18)) {
-		do_zones_remove(ssl, worker->daemon->local_zones);
-	} else if(cmdcmp(p, "local_zone", 10)) {
-		do_zone_add(ssl, worker->daemon->local_zones, skipwhite(p+10));
-	} else if(cmdcmp(p, "local_zones", 11)) {
-		do_zones_add(ssl, worker->daemon->local_zones);
-	} else if(cmdcmp(p, "local_data_remove", 17)) {
-		do_data_remove(ssl, worker->daemon->local_zones, skipwhite(p+17));
-	} else if(cmdcmp(p, "local_datas_remove", 18)) {
-		do_datas_remove(ssl, worker->daemon->local_zones);
-	} else if(cmdcmp(p, "local_data", 10)) {
-		do_data_add(ssl, worker->daemon->local_zones, skipwhite(p+10));
-	} else if(cmdcmp(p, "local_datas", 11)) {
-		do_datas_add(ssl, worker->daemon->local_zones);
-	} else if(cmdcmp(p, "view_local_zone_remove", 22)) {
-		do_view_zone_remove(ssl, worker, skipwhite(p+22));
-	} else if(cmdcmp(p, "view_local_zone", 15)) {
-		do_view_zone_add(ssl, worker, skipwhite(p+15));
-	} else if(cmdcmp(p, "view_local_data_remove", 22)) {
-		do_view_data_remove(ssl, worker, skipwhite(p+22));
-	} else if(cmdcmp(p, "view_local_datas_remove", 23)){
-		do_view_datas_remove(ssl, worker, skipwhite(p+23));
-	} else if(cmdcmp(p, "view_local_data", 15)) {
-		do_view_data_add(ssl, worker, skipwhite(p+15));
-	} else if(cmdcmp(p, "view_local_datas", 16)) {
-		do_view_datas_add(ssl, worker, skipwhite(p+16));
-	} else if(cmdcmp(p, "flush_zone", 10)) {
-		do_flush_zone(ssl, worker, skipwhite(p+10));
-	} else if(cmdcmp(p, "flush_type", 10)) {
-		do_flush_type(ssl, worker, skipwhite(p+10));
-	} else if(cmdcmp(p, "flush_infra", 11)) {
-		do_flush_infra(ssl, worker, skipwhite(p+11));
-	} else if(cmdcmp(p, "flush", 5)) {
-		do_flush_name(ssl, worker, skipwhite(p+5));
-	} else if(cmdcmp(p, "dump_requestlist", 16)) {
-		do_dump_requestlist(ssl, worker);
-	} else if(cmdcmp(p, "dump_infra", 10)) {
-		do_dump_infra(ssl, worker);
-	} else if(cmdcmp(p, "log_reopen", 10)) {
-		do_log_reopen(ssl, worker);
-	} else if(cmdcmp(p, "set_option", 10)) {
-		do_set_option(ssl, worker, skipwhite(p+10));
-	} else if(cmdcmp(p, "get_option", 10)) {
-		do_get_option(ssl, worker, skipwhite(p+10));
-	} else if(cmdcmp(p, "flush_bogus", 11)) {
-		do_flush_bogus(ssl, worker);
-	} else if(cmdcmp(p, "flush_negative", 14)) {
-		do_flush_negative(ssl, worker);
-    } else if(cmdcmp(p, "rpz_enable", 10)) {
-        do_rpz_enable(ssl, worker, skipwhite(p+10));
-    } else if(cmdcmp(p, "rpz_disable", 11)) {
-        do_rpz_disable(ssl, worker, skipwhite(p+11));
-	} else {
-		(void)ssl_printf(ssl, "error unknown command '%s'\n", p);
-	}
+
+	(void) ssl_printf(ssl, "error unknown command '%s'\n", p);
 }
 
 void 
@@ -3135,14 +3397,22 @@ daemon_remote_exec(struct worker* worker)
 	free(msg);
 }
 
+#define	MAKE_STR(v)   #v
+#define	VAR_TO_STR(v) MAKE_STR(v)
+
+// All commands must begin with this character sequence
+
+static char const UBCT[] = "UBCT" VAR_TO_STR(UNBOUND_CONTROL_VERSION) " "; 
+
+#define	MAJIK_LEN	(sizeof(UBCT) - 1)
+
 /** handle remote control request */
 static void
 handle_req(struct daemon_remote* rc, struct rc_state* s, RES* res)
 {
-	int r;
-	char pre[10];
-	char magic[7];
+	char magic[sizeof(UBCT)];
 	char buf[1024];
+	int r;
 #ifdef USE_WINSOCK
 	/* makes it possible to set the socket blocking again. */
 	/* basically removes it from winsock_event ... */
@@ -3153,48 +3423,50 @@ handle_req(struct daemon_remote* rc, struct rc_state* s, RES* res)
 	/* try to read magic UBCT[version]_space_ string */
 	if(res->ssl) {
 		ERR_clear_error();
-		if((r=SSL_read(res->ssl, magic, (int)sizeof(magic)-1)) <= 0) {
-			if(SSL_get_error(res->ssl, r) == SSL_ERROR_ZERO_RETURN)
-				return;
-			log_crypto_err("could not SSL_read");
+		if((r = SSL_read(res->ssl, magic, MAJIK_LEN)) <= 0) {
+			if(SSL_get_error(res->ssl, r) != SSL_ERROR_ZERO_RETURN) {
+				log_crypto_err("could not SSL_read");
+			}
+
 			return;
 		}
 	} else {
-		while(1) {
-			ssize_t rr = recv(res->fd, magic, sizeof(magic)-1, 0);
-			if(rr <= 0) {
-				if(rr == 0) return;
-				if(errno == EINTR || errno == EAGAIN)
-					continue;
+		ssize_t rr;
+
+		do {
+			if ((rr = recv(res->fd, magic, MAJIK_LEN, 0)) > 0) {
+				break;
+			}
+			if (rr == 0) {
+				return;
+			}
+			if (errno != EINTR && errno != EAGAIN) {
 				log_err("could not recv: %s", sock_strerror(errno));
 				return;
 			}
-			r = (int)rr;
-			break;
+		} while (1);
+
+		r = (int) rr;
+	}
+
+	if (r != MAJIK_LEN || strncmp(magic, UBCT, 4) != 0) {
+		/* probably wrong tool connected, ignore it completely */
+
+		verbose(VERB_QUERY, "control connection has bad magic string");
+	} else if (ssl_read_line(res, buf, sizeof(buf))) {
+		magic[MAJIK_LEN] = '\0';
+	
+		if(strcmp(magic, UBCT) == 0) {
+			verbose(VERB_DETAIL, "control cmd: %s", buf);
+			execute_cmd(rc, res, buf, rc->worker);
+		} else {
+			verbose(VERB_QUERY,
+			        "control connection had bad version %s, cmd: %s",
+			        magic,
+			        buf);
+			ssl_printf(res, "error version mismatch\n");
 		}
 	}
-	magic[6] = 0;
-	if( r != 6 || strncmp(magic, "UBCT", 4) != 0) {
-		verbose(VERB_QUERY, "control connection has bad magic string");
-		/* probably wrong tool connected, ignore it completely */
-		return;
-	}
-
-	/* read the command line */
-	if(!ssl_read_line(res, buf, sizeof(buf))) {
-		return;
-	}
-	snprintf(pre, sizeof(pre), "UBCT%d ", UNBOUND_CONTROL_VERSION);
-	if(strcmp(magic, pre) != 0) {
-		verbose(VERB_QUERY, "control connection had bad "
-			"version %s, cmd: %s", magic, buf);
-		ssl_printf(res, "error version mismatch\n");
-		return;
-	}
-	verbose(VERB_DETAIL, "control cmd: %s", buf);
-
-	/* figure out what to do */
-	execute_cmd(rc, res, buf, rc->worker);
 }
 
 /** handle SSL_do_handshake changes to the file descriptor to wait for later */

@@ -5119,7 +5119,7 @@ xfr_transfer_lookup_host(struct auth_xfer* xfr, struct module_env* env)
 	 * called straight away */
 	lock_basic_unlock(&xfr->lock);
 	if(!mesh_new_callback(env->mesh, &qinfo, qflags, &edns, buf, 0,
-		&auth_xfer_transfer_lookup_callback, xfr)) {
+		&auth_xfer_transfer_lookup_callback, xfr, env->current_view_env)) {
 		lock_basic_lock(&xfr->lock);
 		log_err("out of memory lookup up master %s", master->host);
 		return 0;
@@ -6308,7 +6308,7 @@ xfr_probe_lookup_host(struct auth_xfer* xfr, struct module_env* env)
 	 * called straight away */
 	lock_basic_unlock(&xfr->lock);
 	if(!mesh_new_callback(env->mesh, &qinfo, qflags, &edns, buf, 0,
-		&auth_xfer_probe_lookup_callback, xfr)) {
+		&auth_xfer_probe_lookup_callback, xfr, env->current_view_env)) {
 		lock_basic_lock(&xfr->lock);
 		log_err("out of memory lookup up master %s", master->host);
 		return 0;

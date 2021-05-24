@@ -51,6 +51,7 @@ struct libworker;
 struct tube;
 struct sldns_buffer;
 struct ub_event_base;
+struct views;
 
 /** store that the logfile has a debug override */
 extern int ctx_logfile_overridden;
@@ -137,6 +138,8 @@ struct ub_ctx {
 	 * Content of type ctx_query.
 	 */ 
 	rbtree_type queries;
+	/** views structure containing view tree */
+	struct views* views;
 };
 
 /**

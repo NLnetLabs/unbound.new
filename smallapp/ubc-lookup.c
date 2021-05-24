@@ -1,0 +1,354 @@
+// Copyright (c) 2021 Secure64 Software
+// All Rights Reserved
+//
+// Redistribution and use in source and binary forms, with or without
+// modification, are permitted provided that the following conditions are met:
+//
+// * Redistributions of source code must retain the above copyright notice,
+//   this list of conditions and the following disclaimer.
+// * Redistributions in binary form must reproduce the above copyright notice,
+//   this list of conditions and the following disclaimer in the documentation
+//   and/or other materials provided with the distribution.
+// * Neither the name of Secure64 Software nor the names of its contributors
+//   may be used to endorse or promote products derived from this software
+//   without specific prior written permission.
+//
+// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+// AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+// IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+// ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
+// LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+// CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+// SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+// INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+// CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+// ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+// POSSIBILITY OF SUCH DAMAGE.
+//
+// ubc-lookup [ spec.xml ... ]
+//
+//	Create a compiled hash table of unbound-control commands to include
+//	in daemon/remote.c. This allows for O(1) command lookup instead of
+//	O(n) chains of string comparisons.
+//
+//	The tables and code are written to stdout; errors or hash stats are
+//	written to stderr.
+
+#include "ubc-xml.h"
+
+#define	MAKE_STR(v) #v
+#define	VSTR(v)     MAKE_STR(v)
+
+#define	HASH_TABLE_LOG2   7   // Adjust if the total commands > 63
+#define	HASH_TABLE_SIZE   (1 << HASH_TABLE_LOG2)
+#define HASH_TABLE_MASK   (HASH_TABLE_SIZE - 1)
+#define HASH_TABLE_NDX(x) ((x) & HASH_TABLE_MASK)
+
+typedef struct _command_hash_ cmdHash;
+
+typedef enum {
+	DIST_UNKNOWN = 0,
+	DIST_NO,
+	DIST_YES,
+	DIST_NT
+} distType;
+
+struct _command_hash_ {
+	cmdHash        *chash_next;
+	const XML_Char *chash_cmd;
+	XML_Char       *chash_func;
+	uint32_t        chash_val;
+	distType        chash_dist;
+	uint32_t        chash_len;
+};
+	
+static cmdHash *hashBins[HASH_TABLE_SIZE];
+static uint32_t collCount;
+static uint32_t maxChain = 1;
+
+static cmdHash *
+insert_command(struct parser_data *pdp)
+{
+	const XML_Char *cmd = pdp->command;
+	uint32_t hash = string_hash(cmd);
+	cmdHash **hpp = hashBins + HASH_TABLE_NDX(hash);
+	cmdHash  *hp;
+
+	if ((hp = *hpp) != NULL) {
+		uint32_t chain = 1;
+
+		collCount++;
+
+		do {
+			chain++;
+
+			if (hp->chash_val == hash) {
+				// Because we use the hash value to name the structures,
+				// we fail if any commands have a full 32-bit collision
+
+				parse_error(pdp, "Fatal error");
+
+				if (strcmp(cmd, hp->chash_cmd) == 0) {
+					fprintf(pdp->err, "Duplicate command " XML_STR("") "\n",
+					        cmd);
+				} else {
+					fprintf(pdp->err, XML_STR("") " collides with "
+					                  XML_STR("") "\n",
+					        hp->chash_cmd,
+					        cmd);
+				}
+
+				fprintf(pdp->err, "\n");
+				return (NULL);
+			}
+
+			hpp = &hp->chash_next;
+		} while ((hp = *hpp) != NULL);
+
+		if (chain > maxChain) {
+			maxChain = chain;
+		}
+	}
+	if ((hp = malloc(sizeof(*hp))) == NULL) {
+		parse_error(pdp, "out of memory for " XML_STR(""), cmd);
+		return (NULL);
+	}
+
+	hp->chash_next = NULL;
+	hp->chash_val  = hash;
+	hp->chash_dist = DIST_UNKNOWN;
+	hp->chash_func = NULL;
+	hp->chash_cmd  = cmd;
+	hp->chash_len  = strlen(cmd);
+
+	*hpp = hp;
+
+	return (hp);
+}
+
+static char *
+entryName(cmdHash *hp)
+{
+	static char name[16];
+
+	sprintf(name, "__%08x", hp->chash_val);
+	return (name);
+}
+
+static void
+declareChain(cmdHash *hp, FILE *fp)
+{
+	if (hp != NULL) {
+		declareChain(hp->chash_next, fp);
+
+		fprintf(fp, "static const cmdHash %s = {\n", entryName(hp));
+
+		if (hp->chash_next == NULL) {
+			fprintf(fp, "\tNULL,\n");
+		} else {
+			fprintf(fp, "\t&%s,\n", entryName(hp->chash_next));
+		}
+
+		fprintf(fp, "\t\"" XML_STR("") "\",\n", hp->chash_cmd);
+		fprintf(fp, "\t" XML_STR("") ",\n", hp->chash_func);
+		fprintf(fp, "\t0x%08x,\n", hp->chash_val);
+		fprintf(fp, "\t%u,\n", hp->chash_len);
+
+		if (hp->chash_dist == DIST_YES) {
+			fprintf(fp, "\t1\n");
+		} else if (hp->chash_dist == DIST_NO) {
+			fprintf(fp, "\t0\n");
+		} else {
+			fprintf(fp, "\tDIST_NOTHREAD\n");
+		}
+
+		fprintf(fp, "};\n\n");
+	}
+}
+
+static void
+dumpHashTable(struct parser_data *pdp)
+{
+	static const char protoType[] =
+		"(RES *, struct worker *, struct view *, char *arg)";
+
+	static const char decl[] =
+		"// THIS FILE IS AUTOMATICALLY GENERATED\n"
+		"// DO NOT EDIT, MODIFY, COMMIT, ARCHIVE!\n"
+		"// LOOK AT smallapp/ubc.xml FOR MORE INFORMATION\n\n"
+		"typedef void (*ubc)%s;\n"
+		"typedef struct _command_hash_ cmdHash;\n"
+#if	defined(HASH64)
+		"typedef uint64_t cmdHashType;\n"
+#else
+		"typedef uint32_t cmdHashType;\n"
+#endif
+		"\n"
+		"struct _command_hash_ {\n"
+		"\tcmdHash const *next;\n"
+		"\tchar const    *cmd;\n"
+		"\tubc            fnc;\n"
+		"\tuint32_t       hash;\n"
+		"\tuint16_t       len;\n"
+		"\tuint16_t       dist;\n"
+		"};\n\n"
+		"#if defined(THREADS_DISABLED)\n"
+		"#define DIST_NOTHREAD 1\n"
+		"#else\n"
+		"#define DIST_NOTHREAD 0\n"
+		"#endif\n\n";
+
+	static const char hashFnc[] =
+		"#define HASH_TABLE_LOG2 " VSTR(HASH_TABLE_LOG2) "\n"
+		"#define HASH_TABLE_SIZE   (1 << HASH_TABLE_LOG2)\n"
+		"#define HASH_TABLE_MASK   (HASH_TABLE_SIZE - 1)\n"
+		"#define HASH_TABLE_NDX(x) ((x) & HASH_TABLE_MASK)\n"
+#if	defined(HASH64)
+		"#define HASH_INIT  0xcbf29ce484222325ULL\n"
+		"#define HASH_MULT  0x00000100000001B3ULL\n\n"
+#else  // !defined(HASH64)
+		"#define HASH_INIT  0x811C9DC5U\n"
+		"#define HASH_MULT  0x01000193U\n\n"
+#endif // !defined(HASH64)
+		"static inline cmdHashType\n"
+		"_hashFunc(cmdHashType h, char c)\n"
+		"{\n"
+		"\treturn ((h + c) * HASH_MULT);\n"
+		"}\n\n"
+		"static inline uint32_t\n"
+		"_hashFold(cmdHashType h)\n"
+		"{\n"
+#if	defined(HASH64)
+		"\treturn ((uint32_t)(h >> 32) ^ (uint32_t)(h & 0xffffffffULL));\n"
+#else
+		"\treturn (h);\n"
+#endif
+		"}\n";
+
+	FILE *fp = pdp->out;
+	uint32_t ndx;
+	cmdHash *hp;
+
+	// Dump the declarations and bins for the hash table to the
+	// specified file. Dump in reverse order to build up hash
+	// chain declarations.
+
+	fprintf(fp, decl, protoType);
+
+	for (ndx = 0; ndx < HASH_TABLE_SIZE; ndx++) {
+		declareChain(hashBins[ndx], fp);
+	}
+
+	fprintf(fp, "static const cmdHash const *cmdTable[] = {");
+
+	for (ndx = 0; ndx < HASH_TABLE_SIZE; ndx++) {
+		hp = hashBins[ndx];
+
+		if ((ndx & 0x3) == 0) {
+			fprintf(fp, "\n\t");
+		} else {
+			fprintf(fp, " ");
+		}
+		if (hp == NULL) {
+			fprintf(fp, "       NULL,");
+		} else {
+			fprintf(fp, "&%s,", entryName(hp));
+		}
+	}
+
+	fprintf(fp, "\n};\n\n");
+	fprintf(fp, "%s\n", hashFnc);
+}
+
+static cmdHash *currHash;
+
+void XMLCALL
+xmlStart(void *udata, const XML_Char *name, const XML_Char **attrs)
+{
+	struct parser_data *pdp = udata;
+
+	if (strcmp(name, "Function") == 0) {
+		const XML_Char *ap, *vp;
+
+		if ((ap = *attrs++) == NULL) {
+			parse_error(pdp, XML_STR("") "has no attributes",
+			                  pdp->command);
+			exit(1);
+		}
+		if (strcmp(ap, "distribute") != 0) {
+			parse_error(pdp, "unknown attribute " XML_STR(""), ap);
+			exit(1);
+		}
+
+		vp = *attrs;
+
+		// Try to create the hash entry now.
+
+		cmdHash *hp;
+
+		if ((hp = insert_command(pdp)) == NULL) {
+			exit(1);
+		}
+
+		if (strcmp(vp, "yes") == 0) {
+			hp->chash_dist = DIST_YES;
+		} else if (strcmp(vp, "no") == 0) {
+			hp->chash_dist = DIST_NO;
+		} else if (strcmp(vp, "nothread") == 0) {
+			hp->chash_dist = DIST_NT;
+		} else {
+			parse_error(pdp, XML_STR("") " unknown value for" XML_STR(""),
+			                  vp,
+			                  ap);
+			exit(1);
+		}
+
+		// Remember the last hash
+
+		currHash = hp;
+	}
+}
+
+void XMLCALL
+xmlEnd(void *udata, const XML_Char *name)
+{
+	struct parser_data *pdp = udata;
+
+	if (strcmp(name, "Command") == 0) {
+		// We want to keep the pointer we created to the command,
+		// so set it to NULL before clearing the other information
+
+		pdp->command = NULL;
+		clrCommandInfo(pdp);
+	} else if (strcmp(name, "Function") == 0) {
+		// Done collecting data
+
+		currHash = NULL;
+	} else if (strcmp(name, "CommandList") == 0) {
+		dumpHashTable(pdp);
+		fprintf(pdp->err, "Found %u collsions\n", collCount);
+		fprintf(pdp->err, "  Max chain %u\n", maxChain);
+	}
+}
+
+void
+xmlComment(void *udata, const XML_Char *info)
+{
+}
+
+void
+xmlText(void *udata, const XML_Char *info, int len)
+{
+	struct parser_data *pdp = udata;
+
+	if (currHash != NULL) {
+		if (currHash->chash_func != NULL) {
+			parse_error(pdp, XML_STR("") ": excess function declaration",
+			                  pdp->command);
+		} else if ((currHash->chash_func = textCopy(info, len)) == NULL) {
+			parse_error(pdp, XML_STR("") ": out of memory",
+			                  pdp->command);
+			exit(1);
+		}
+	}
+}

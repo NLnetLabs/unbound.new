@@ -79,6 +79,7 @@
 #include "util/tcp_conn_limit.h"
 #include "util/edns.h"
 #include "services/listen_dnsport.h"
+#include "services/cache/dns.h"
 #include "services/cache/rrset.h"
 #include "services/cache/infra.h"
 #include "services/localzone.h"
@@ -593,13 +594,8 @@ daemon_fork(struct daemon* daemon)
 #ifdef HAVE_SYSTEMD
 	int ret;
 #endif
-
 	log_assert(daemon);
-	if(!(daemon->views = views_create()))
-		fatal_exit("Could not create views: out of memory");
-	/* create individual views and their localzone/data trees */
-	if(!views_apply_cfg(daemon->views, daemon->cfg))
-		fatal_exit("Could not set up views");
+	daemon_views(daemon);
 
 	if(!acl_list_apply_cfg(daemon->acl, daemon->cfg, daemon->views))
 		fatal_exit("Could not setup access control list");
@@ -616,23 +612,18 @@ daemon_fork(struct daemon* daemon)
 				   "dnscrypt support");
 #endif
 	}
-	/* create global local_zones */
-	if(!(daemon->local_zones = local_zones_create()))
-		fatal_exit("Could not create local zones: out of memory");
-	if(!local_zones_apply_cfg(daemon->local_zones, daemon->cfg))
-		fatal_exit("Could not set up local zones");
+	// global local_zones are instantiated as part of the default view, so
+	// just copy them over
+	//
+	//	TODO: Move this out of the daemon structure
+
+	daemon->local_zones = daemon->views->server_view.local_zones;
 
 	/* process raw response-ip configuration data */
-	if(!(daemon->respip_set = respip_set_create()))
-		fatal_exit("Could not create response IP set");
-	if(!respip_global_apply_cfg(daemon->respip_set, daemon->cfg))
-		fatal_exit("Could not set up response IP set");
-	if(!respip_views_apply_cfg(daemon->views, daemon->cfg,
-		&have_view_respip_cfg))
+	if(!respip_views_apply_cfg(daemon->views,
+	                           &daemon->use_response_ip))
 		fatal_exit("Could not set up per-view response IP sets");
-	daemon->use_response_ip = !respip_set_is_empty(daemon->respip_set) ||
-		have_view_respip_cfg;
-	
+
 	/* read auth zonefiles */
 	if(!auth_zones_apply_cfg(daemon->env->auth_zones, daemon->cfg, 1,
 		&daemon->use_rpz))
@@ -731,8 +722,6 @@ daemon_cleanup(struct daemon* daemon)
 	slabhash_clear(daemon->env->msg_cache);
 	local_zones_delete(daemon->local_zones);
 	daemon->local_zones = NULL;
-	respip_set_delete(daemon->respip_set);
-	daemon->respip_set = NULL;
 	views_delete(daemon->views);
 	daemon->views = NULL;
 	if(daemon->env->auth_zones)
@@ -839,23 +828,12 @@ daemon_delete(struct daemon* daemon)
 
 void daemon_apply_cfg(struct daemon* daemon, struct config_file* cfg)
 {
-        daemon->cfg = cfg;
+	daemon->cfg = cfg;
 	config_apply(cfg);
-	if(!slabhash_is_size(daemon->env->msg_cache, cfg->msg_cache_size,
-	   	cfg->msg_cache_slabs)) {
-		slabhash_delete(daemon->env->msg_cache);
-		daemon->env->msg_cache = slabhash_create(cfg->msg_cache_slabs,
-			HASH_DEFAULT_STARTARRAY, cfg->msg_cache_size,
-			msgreply_sizefunc, query_info_compare,
-			query_entry_delete, reply_info_delete, NULL);
-		if(!daemon->env->msg_cache) {
-			fatal_exit("malloc failure updating config settings");
-		}
+
+	daemon->env->infra_cache = infra_adjust(daemon->env->infra_cache, cfg);
+
+	if(!daemon->env->infra_cache) {
+		fatal_exit("malloc failure updating config settings");
 	}
-	if((daemon->env->rrset_cache = rrset_cache_adjust(
-		daemon->env->rrset_cache, cfg, &daemon->superalloc)) == 0)
-		fatal_exit("malloc failure updating config settings");
-	if((daemon->env->infra_cache = infra_adjust(daemon->env->infra_cache,
-		cfg))==0)
-		fatal_exit("malloc failure updating config settings");
 }

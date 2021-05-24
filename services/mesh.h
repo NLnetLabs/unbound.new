@@ -299,7 +299,7 @@ void mesh_delete(struct mesh_area* mesh);
  */
 void mesh_new_client(struct mesh_area* mesh, struct query_info* qinfo,
 	struct respip_client_info* cinfo, uint16_t qflags,
-	struct edns_data* edns, struct comm_reply* rep, uint16_t qid);
+	struct edns_data* edns, struct comm_reply* rep, uint16_t qid, struct view* view);
 
 /**
  * New query with callback. Create new query state if needed, and
@@ -318,7 +318,7 @@ void mesh_new_client(struct mesh_area* mesh, struct query_info* qinfo,
  */
 int mesh_new_callback(struct mesh_area* mesh, struct query_info* qinfo,
 	uint16_t qflags, struct edns_data* edns, struct sldns_buffer* buf, 
-	uint16_t qid, mesh_cb_func_type cb, void* cb_arg);
+	uint16_t qid, mesh_cb_func_type cb, void* cb_arg, struct view* view);
 
 /**
  * New prefetch message. Create new query state if needed.
@@ -330,7 +330,7 @@ int mesh_new_callback(struct mesh_area* mesh, struct query_info* qinfo,
  * @param leeway: TTL leeway what to expire earlier for this update.
  */
 void mesh_new_prefetch(struct mesh_area* mesh, struct query_info* qinfo,
-	uint16_t qflags, time_t leeway);
+	uint16_t qflags, time_t leeway, struct view* view);
 
 /**
  * Handle new event from the wire. A serviced query has returned.
@@ -465,7 +465,7 @@ void mesh_state_delete(struct module_qstate* qstate);
  */
 struct mesh_state* mesh_state_create(struct module_env* env,
 	struct query_info* qinfo, struct respip_client_info* cinfo,
-	uint16_t qflags, int prime, int valrec);
+	uint16_t qflags, int prime, int valrec, struct view* view);
 
 /**
  * Check if the mesh state is unique.
@@ -510,7 +510,7 @@ void mesh_delete_all(struct mesh_area* mesh);
  */
 struct mesh_state* mesh_area_find(struct mesh_area* mesh,
 	struct respip_client_info* cinfo, struct query_info* qinfo,
-	uint16_t qflags, int prime, int valrec);
+	uint16_t qflags, int prime, int valrec, struct view* view);
 
 /**
  * Setup attachment super/sub relation between super and sub mesh state.

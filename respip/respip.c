@@ -394,14 +394,63 @@ respip_set_apply_cfg(struct respip_set* set, char* const* tagname, int num_tags,
 	return 1;
 }
 
+// Legacy interface for unit testing
+
 int
 respip_global_apply_cfg(struct respip_set* set, struct config_file* cfg)
 {
-	int ret = respip_set_apply_cfg(set, cfg->tagname, cfg->num_tags,
-		cfg->respip_tags, cfg->respip_actions, cfg->respip_data);
+	int ret;
+
+	ret = respip_set_apply_cfg(set,
+	                           cfg->tagname, cfg->num_tags, cfg->respip_tags,
+	                           cfg->respip_actions,
+	                           cfg->respip_data);
+
 	cfg->respip_data = NULL;
 	cfg->respip_actions = NULL;
 	cfg->respip_tags = NULL;
+
+	return ret;
+}
+
+static int
+respip_view_apply(struct view *v,
+                  int server,
+                  int *have_respip)
+{
+	struct config_file* cfg = v->view_cfg;
+	struct respip_set *set;
+	int ret;
+
+	if (v->respip_set == NULL) {
+		if ((v->respip_set = respip_set_create()) == NULL) {
+			log_err("out of memory");
+			return 0;
+		}
+	}
+
+	ret = respip_set_apply_cfg(v->respip_set,
+	                           server ? cfg->tagname : NULL,
+	                           server ? cfg->num_tags : 0,
+	                           server ? cfg->respip_tags : NULL,
+	                           cfg->respip_actions,
+	                           cfg->respip_data);
+
+	if (ret == 0) {
+		log_err("Error while applying respip configuration for view '%s'",
+		         server ? "server" : v->name);
+	} else {
+		if (v->respip_set->ip_tree.count != 0) {
+			*have_respip = 1;
+		}
+		if (server) {
+			cfg->respip_tags = NULL;
+		}
+
+		cfg->respip_actions = NULL;
+		cfg->respip_data = NULL;
+	}
+
 	return ret;
 }
 
@@ -414,48 +463,54 @@ respip_global_apply_cfg(struct respip_set* set, struct config_file* cfg)
  * processing phase).
  */
 int
-respip_views_apply_cfg(struct views* vs, struct config_file* cfg,
-	int* have_view_respip_cfg)
+respip_views_apply_cfg(struct views* vs,
+                       int* have_view_respip_cfg)
 {
+	struct view* server = &vs->server_view;
+
+	// Set up response IP's for the server view
+
+	lock_rw_wrlock(&server->lock);
+
+	if (respip_view_apply(server, 1, have_view_respip_cfg) == 0) {
+		return 0;
+	}
+
+	lock_rw_unlock(&server->lock);
+
+	struct config_file* cfg = server->view_cfg;
 	struct config_view* cv;
-	struct view* v;
 	int ret;
 
-	for(cv = cfg->views; cv; cv = cv->next) {
+	for (cv = cfg->views; cv != NULL; cv = cv->next) {
+		struct view* v;
+
+		if ((v = views_find_view(vs, cv->name, 1)) == NULL) {
+			log_err("view '%s' unexpectedly missing", cv->name);
+			return 0;
+		}
 
 		/** if no respip config for this view then there's
 		  * nothing to do; note that even though respip data must go
 		  * with respip action, we're checking for both here because
 		  * we want to catch the case where the respip action is missing
 		  * while the data is present */
-		if(!cv->respip_actions && !cv->respip_data)
-			continue;
 
-		if(!(v = views_find_view(vs, cv->name, 1))) {
-			log_err("view '%s' unexpectedly missing", cv->name);
-			return 0;
-		}
-		if(!v->respip_set) {
-			v->respip_set = respip_set_create();
-			if(!v->respip_set) {
-				log_err("out of memory");
+		if (v->view_cfg->respip_actions || v->view_cfg->respip_data) {
+			if (respip_view_apply(v, 0, have_view_respip_cfg) == 0) {
 				lock_rw_unlock(&v->lock);
 				return 0;
 			}
 		}
-		ret = respip_set_apply_cfg(v->respip_set, NULL, 0, NULL,
-			cv->respip_actions, cv->respip_data);
-		lock_rw_unlock(&v->lock);
-		if(!ret) {
-			log_err("Error while applying respip configuration "
-				"for view '%s'", cv->name);
-			return 0;
+		if (cv->isfirst) {
+			// Allow for respip fallback only when isfirst is configured
+
+			v->server_set = server->respip_set;
 		}
-		*have_view_respip_cfg = (*have_view_respip_cfg ||
-			v->respip_set->ip_tree.count);
-		cv->respip_actions = NULL;
-		cv->respip_data = NULL;
+
+		lock_rw_unlock(&v->lock);
 	}
+
 	return 1;
 }
 
@@ -899,12 +954,6 @@ respip_rewrite_reply(const struct query_info* qinfo,
 	struct ub_packed_rrset_key** alias_rrset, int search_only,
 	struct regional* region, struct auth_zones* az)
 {
-	const uint8_t* ctaglist;
-	size_t ctaglen;
-	const uint8_t* tag_actions;
-	size_t tag_actions_size;
-	struct config_strlist** tag_datas;
-	size_t tag_datas_size;
 	struct view* view = NULL;
 	struct respip_set* ipset = NULL;
 	size_t rrset_id = 0;
@@ -921,18 +970,20 @@ respip_rewrite_reply(const struct query_info* qinfo,
 	int rpz_cname_override = 0;
 	char* log_name = NULL;
 
-	if(!cinfo)
+	if(!cinfo) {
 		goto done;
-	ctaglist = cinfo->taglist;
-	ctaglen = cinfo->taglen;
-	tag_actions = cinfo->tag_actions;
-	tag_actions_size = cinfo->tag_actions_size;
-	tag_datas = cinfo->tag_datas;
-	tag_datas_size = cinfo->tag_datas_size;
-	view = cinfo->view;
-	ipset = cinfo->respip_set;
+	}
 
-	log_assert(ipset);
+	const uint8_t* ctaglist = cinfo->taglist;
+	size_t ctaglen = cinfo->taglen;
+	const uint8_t* tag_actions = cinfo->tag_actions;
+	size_t tag_actions_size = cinfo->tag_actions_size;
+	struct config_strlist** tag_datas = cinfo->tag_datas;
+	size_t tag_datas_size = cinfo->tag_datas_size;
+
+	view = cinfo->view;
+
+	log_assert(view);
 
 	/** Try to use response-ip config from the view first; use
 	  * global response-ip config if we don't have the view or we don't
@@ -944,61 +995,93 @@ respip_rewrite_reply(const struct query_info* qinfo,
 	  * any of its member can change in the view's lifetime.
 	  * Note also that we assume 'view' is valid in this function, which
 	  * should be safe (see unbound bug #1191) */
-	if(view) {
-		lock_rw_rdlock(&view->lock);
-		if(view->respip_set) {
-			if((raddr = respip_addr_lookup(rep,
-				view->respip_set, &rrset_id))) {
-				/** for per-view respip directives the action
-				 * can only be direct (i.e. not tag-based) */
-				action = raddr->action;
-			}
-		}
-		if(!raddr && !view->isfirst)
-			goto done;
-		if(!raddr && view->isfirst) {
+
+	lock_rw_rdlock(&view->lock);
+
+	int server = (view->server_view == view);
+
+	if ((ipset = view->respip_set) == NULL) {
+		// A view with no respip tree. Unlike local zones, we don't
+		// automatically fall back to the server configuration, so check
+		// for a NULL server respip tree
+
+		if ((ipset = view->server_set) == NULL) {
 			lock_rw_unlock(&view->lock);
-			view = NULL;
+			goto done;
 		}
-	}
-	if(!raddr && (raddr = respip_addr_lookup(rep, ipset,
-		&rrset_id))) {
-		action = (enum respip_action)local_data_find_tag_action(
-			raddr->taglist, raddr->taglen, ctaglist, ctaglen,
-			tag_actions, tag_actions_size,
-			(enum localzone_type)raddr->action, &tag,
-			ipset->tagname, ipset->num_tags);
-	}
-	lock_rw_rdlock(&az->rpz_lock);
-	for(a = az->rpz_first; a && !raddr; a = a->rpz_az_next) {
-		lock_rw_rdlock(&a->lock);
-		r = a->rpz;
-		if(!r->taglist || taglist_intersect(r->taglist, 
-			r->taglistlen, ctaglist, ctaglen)) {
-			if((raddr = respip_addr_lookup(rep,
-				r->respip_set, &rrset_id))) {
-				if(!respip_use_rpz(raddr, r, &action, &data,
-					&rpz_log, &log_name, &rpz_cname_override,
-					region, &rpz_used)) {
-					log_err("out of memory");
-					lock_rw_unlock(&raddr->lock);
-					lock_rw_unlock(&a->lock);
-					lock_rw_unlock(&az->rpz_lock);
-					return 0;
-				}
-				if(rpz_used) {
-					/* break to make sure 'a' stays pointed
-					 * to used auth_zone, and keeps lock */
-					break;
-				}
-				lock_rw_unlock(&raddr->lock);
-				raddr = NULL;
-				actinfo->rpz_disabled++;
+
+		server = 1;
+	} else if ((raddr = respip_addr_lookup(rep, ipset, &rrset_id)) == NULL) {
+		// No match in the view's respip set. If this is a server view,
+		// we move ahead with the current ipset; otherwise, if there's no
+		// fallback, we're done.
+
+		if (!server) {
+			if ((ipset = view->server_set) == NULL) {
+				lock_rw_unlock(&view->lock);
+				goto done;
 			}
+
+			server = 1;
 		}
-		lock_rw_unlock(&a->lock);
 	}
-	lock_rw_unlock(&az->rpz_lock);
+	if (raddr != NULL ||
+	        (raddr = respip_addr_lookup(rep, ipset, &rrset_id)) != NULL) {
+		action = raddr->action;
+
+		if (server) {
+		// Look up the tag information for the server view
+		// per-view respip directives the action can only be direct
+		// (i.e. not tag-based)
+
+			action = (enum respip_action)
+			    local_data_find_tag_action(raddr->taglist, raddr->taglen,
+			                               ctaglist, ctaglen,
+			                               tag_actions, tag_actions_size,
+			                               (enum localzone_type) action,
+			                               &tag,
+			                               ipset->tagname, ipset->num_tags);
+		}
+	}
+
+	lock_rw_unlock(&view->lock);
+
+	if (raddr == NULL) {
+		// Look in the RPZ data
+
+		lock_rw_rdlock(&az->rpz_lock);
+
+		for(a = az->rpz_first; a && !raddr; a = a->rpz_az_next) {
+			lock_rw_rdlock(&a->lock);
+			r = a->rpz;
+			if(!r->taglist || taglist_intersect(r->taglist, 
+				r->taglistlen, ctaglist, ctaglen)) {
+				if((raddr = respip_addr_lookup(rep,
+					r->respip_set, &rrset_id))) {
+					if(!respip_use_rpz(raddr, r, &action, &data,
+						&rpz_log, &log_name, &rpz_cname_override,
+						region, &rpz_used)) {
+						log_err("out of memory");
+						lock_rw_unlock(&raddr->lock);
+						lock_rw_unlock(&a->lock);
+						lock_rw_unlock(&az->rpz_lock);
+						return 0;
+					}
+					if(rpz_used) {
+						/* break to make sure 'a' stays pointed
+						 * to used auth_zone, and keeps lock */
+						break;
+					}
+					lock_rw_unlock(&raddr->lock);
+					raddr = NULL;
+					actinfo->rpz_disabled++;
+				}
+			}
+			lock_rw_unlock(&a->lock);
+		}
+
+		lock_rw_unlock(&az->rpz_lock);
+	}
 	if(raddr && !search_only) {
 		int result = 0;
 
@@ -1010,10 +1093,16 @@ respip_rewrite_reply(const struct query_info* qinfo,
 			&& action != respip_always_nodata
 			&& action != respip_always_deny
 			&& (result = respip_data_answer(action,
-			(data) ? data : raddr->data, qinfo->qtype, rep,
-			rrset_id, new_repp, tag, tag_datas, tag_datas_size,
-			ipset->tagname, ipset->num_tags, &redirect_rrset,
-			region)) < 0) {
+			                                (data) ? data : raddr->data,
+			                                qinfo->qtype,
+			                                rep,
+			                                rrset_id,
+			                                new_repp,
+			                                tag,
+			                                tag_datas, tag_datas_size,
+			                                ipset->tagname, ipset->num_tags,
+			                                &redirect_rrset,
+			                                region)) < 0) {
 			ret = 0;
 			goto done;
 		}
@@ -1023,13 +1112,10 @@ respip_rewrite_reply(const struct query_info* qinfo,
 		if(!result && !respip_nodata_answer(qinfo->qtype, action, rep,
 			rrset_id, new_repp, region)) {
 			ret = 0;
-			goto done;
 		}
 	}
-  done:
-	if(view) {
-		lock_rw_unlock(&view->lock);
-	}
+
+done:
 	if(ret) {
 		/* If we're redirecting the original answer to a
 		 * CNAME, record the CNAME rrset so the caller can take

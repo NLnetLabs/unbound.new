@@ -45,6 +45,7 @@
 #include "util/net_help.h"
 #include "services/modstack.h"
 #include "services/localzone.h"
+#include "services/cache/dns.h"
 #include "services/cache/rrset.h"
 #include "services/cache/infra.h"
 #include "services/authzone.h"
@@ -52,6 +53,7 @@
 #include "util/storage/slabhash.h"
 #include "util/edns.h"
 #include "sldns/sbuffer.h"
+#include "services/view.h"
 
 int 
 context_finalize(struct ub_ctx* ctx)
@@ -82,20 +84,15 @@ context_finalize(struct ub_ctx* ctx)
 		return UB_INITFAIL;
 	if(!edns_strings_apply_cfg(ctx->env->edns_strings, cfg))
 		return UB_INITFAIL;
-	if(!slabhash_is_size(ctx->env->msg_cache, cfg->msg_cache_size,
-		cfg->msg_cache_slabs)) {
-		slabhash_delete(ctx->env->msg_cache);
-		ctx->env->msg_cache = slabhash_create(cfg->msg_cache_slabs,
-			HASH_DEFAULT_STARTARRAY, cfg->msg_cache_size,
-			msgreply_sizefunc, query_info_compare,
-			query_entry_delete, reply_info_delete, NULL);
-		if(!ctx->env->msg_cache)
-			return UB_NOMEM;
-	}
-	ctx->env->rrset_cache = rrset_cache_adjust(ctx->env->rrset_cache,
-		ctx->env->cfg, ctx->env->alloc);
-	if(!ctx->env->rrset_cache)
+
+	ctx->views = views_create();
+	if(!ctx->views)
 		return UB_NOMEM;
+
+	if (!views_configure(ctx->views, cfg, ctx->env->alloc)) {
+		return UB_INITFAIL;
+	}
+
 	ctx->env->infra_cache = infra_adjust(ctx->env->infra_cache, cfg);
 	if(!ctx->env->infra_cache)
 		return UB_NOMEM;

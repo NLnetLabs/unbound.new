@@ -585,6 +585,32 @@ setup_qinfo_edns(struct libworker* w, struct ctx_query* q,
 	return 1;
 }
 
+static int
+libworker_local_zones_answer(struct libworker* w,
+                             struct local_zones* zones,
+                             struct query_info* qinfo,
+                             struct edns_data* edns)
+{
+	struct view zview = { .local_zones = zones, .server_view = &zview };
+	int    rval;
+
+	lock_rw_init(&zview.lock);
+	lock_protect(&zview.lock, &zview, sizeof(zview));
+
+	rval = local_zones_answer(&zview, w->env,
+	                          qinfo, edns,
+                              w->back->udp_buff, w->env->scratch,
+	                          NULL,      // comm_reply *repinfo
+	                          NULL, 0,   // tag list and length
+	                          NULL, 0,   // tag actions and count
+	                          NULL, 0,   // tag datas and count
+	                          NULL, 0);  // tag name and count
+
+	lock_rw_destroy(&zview.lock);
+
+	return (rval);
+}
+
 int libworker_fg(struct ub_ctx* ctx, struct ctx_query* q)
 {
 	struct libworker* w = libworker_setup(ctx, 0, NULL);
@@ -603,9 +629,8 @@ int libworker_fg(struct ub_ctx* ctx, struct ctx_query* q)
 	/* see if there is a fixed answer */
 	sldns_buffer_write_u16_at(w->back->udp_buff, 0, qid);
 	sldns_buffer_write_u16_at(w->back->udp_buff, 2, qflags);
-	if(local_zones_answer(ctx->local_zones, w->env, &qinfo, &edns, 
-		w->back->udp_buff, w->env->scratch, NULL, NULL, 0, NULL, 0,
-		NULL, 0, NULL, 0, NULL)) {
+
+	if(libworker_local_zones_answer(w, ctx->local_zones, &qinfo, &edns)) {
 		regional_free_all(w->env->scratch);
 		libworker_fillup_fg(q, LDNS_RCODE_NOERROR, 
 			w->back->udp_buff, sec_status_insecure, NULL, 0);
@@ -624,7 +649,7 @@ int libworker_fg(struct ub_ctx* ctx, struct ctx_query* q)
 	}
 	/* process new query */
 	if(!mesh_new_callback(w->env->mesh, &qinfo, qflags, &edns, 
-		w->back->udp_buff, qid, libworker_fg_done_cb, q)) {
+		w->back->udp_buff, qid, libworker_fg_done_cb, q, &ctx->views->server_view)) {
 		free(qinfo.qname);
 		return UB_NOMEM;
 	}
@@ -683,9 +708,8 @@ int libworker_attach_mesh(struct ub_ctx* ctx, struct ctx_query* q,
 	/* see if there is a fixed answer */
 	sldns_buffer_write_u16_at(w->back->udp_buff, 0, qid);
 	sldns_buffer_write_u16_at(w->back->udp_buff, 2, qflags);
-	if(local_zones_answer(ctx->local_zones, w->env, &qinfo, &edns, 
-		w->back->udp_buff, w->env->scratch, NULL, NULL, 0, NULL, 0,
-		NULL, 0, NULL, 0, NULL)) {
+
+	if(libworker_local_zones_answer(w, ctx->local_zones, &qinfo, &edns)) {
 		regional_free_all(w->env->scratch);
 		free(qinfo.qname);
 		libworker_event_done_cb(q, LDNS_RCODE_NOERROR,
@@ -700,11 +724,12 @@ int libworker_attach_mesh(struct ub_ctx* ctx, struct ctx_query* q,
 			w->back->udp_buff, sec_status_insecure, NULL, 0);
 		return UB_NOERROR;
 	}
+
 	/* process new query */
 	if(async_id)
 		*async_id = q->querynum;
 	if(!mesh_new_callback(w->env->mesh, &qinfo, qflags, &edns, 
-		w->back->udp_buff, qid, libworker_event_done_cb, q)) {
+		w->back->udp_buff, qid, libworker_event_done_cb, q, &ctx->views->server_view)) {
 		free(qinfo.qname);
 		return UB_NOMEM;
 	}
@@ -821,9 +846,8 @@ handle_newq(struct libworker* w, uint8_t* buf, uint32_t len)
 	/* see if there is a fixed answer */
 	sldns_buffer_write_u16_at(w->back->udp_buff, 0, qid);
 	sldns_buffer_write_u16_at(w->back->udp_buff, 2, qflags);
-	if(local_zones_answer(w->ctx->local_zones, w->env, &qinfo, &edns, 
-		w->back->udp_buff, w->env->scratch, NULL, NULL, 0, NULL, 0,
-		NULL, 0, NULL, 0, NULL)) {
+
+	if(libworker_local_zones_answer(w, w->ctx->local_zones, &qinfo, &edns)) {
 		regional_free_all(w->env->scratch);
 		q->msg_security = sec_status_insecure;
 		add_bg_result(w, q, w->back->udp_buff, UB_NOERROR, NULL, 0);
@@ -838,10 +862,11 @@ handle_newq(struct libworker* w, uint8_t* buf, uint32_t len)
 		free(qinfo.qname);
 		return;
 	}
+
 	q->w = w;
 	/* process new query */
 	if(!mesh_new_callback(w->env->mesh, &qinfo, qflags, &edns, 
-		w->back->udp_buff, qid, libworker_bg_done_cb, q)) {
+		w->back->udp_buff, qid, libworker_bg_done_cb, q, &w->ctx->views->server_view)) {
 		add_bg_result(w, q, NULL, UB_NOMEM, NULL, 0);
 	}
 	free(qinfo.qname);

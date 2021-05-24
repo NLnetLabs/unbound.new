@@ -2376,13 +2376,13 @@ probe_anchor(struct module_env* env, struct trust_anchor* tp)
 	/* delete the DNSKEY from rrset and key cache so an active probe
 	 * is done. First the rrset so another thread does not use it
 	 * to recreate the key entry in a race condition. */
-	rrset_cache_remove(env->rrset_cache, qinfo.qname, qinfo.qname_len,
+	rrset_cache_remove(env->current_view_env->rrset_cache, qinfo.qname, qinfo.qname_len,
 		qinfo.qtype, qinfo.qclass, 0);
 	key_cache_remove(env->key_cache, qinfo.qname, qinfo.qname_len, 
 		qinfo.qclass);
 
 	if(!mesh_new_callback(env->mesh, &qinfo, qflags, &edns, buf, 0, 
-		&probe_answer_cb, env)) {
+		&probe_answer_cb, env, env->current_view_env)) {
 		log_err("out of memory making 5011 probe");
 	}
 }

@@ -63,6 +63,8 @@
 #include "util/data/dname.h"
 #include "respip/respip.h"
 #include "services/listen_dnsport.h"
+#include "daemon/worker.h"
+#include "daemon/daemon.h"
 
 /** subtract timers and the values do not overflow or become negative */
 static void
@@ -185,10 +187,6 @@ client_info_compare(const struct respip_client_info* ci_a,
 		return ci_a->tag_datas < ci_b->tag_datas ? -1 : 1;
 	if(ci_a->view != ci_b->view)
 		return ci_a->view < ci_b->view ? -1 : 1;
-	/* For the unbound daemon these should be non-NULL and identical,
-	 * but we check that just in case. */
-	if(ci_a->respip_set != ci_b->respip_set)
-		return ci_a->respip_set < ci_b->respip_set ? -1 : 1;
 	return 0;
 }
 
@@ -225,6 +223,10 @@ mesh_state_compare(const void* ap, const void* bp)
 		return 1;
 
 	cmp = query_info_compare(&a->s.qinfo, &b->s.qinfo);
+	if(cmp != 0)
+		return cmp;
+	if(a->s.query_view_env != b->s.query_view_env)
+		return a->s.query_view_env < b->s.query_view_env ? -1 : 1;
 	if(cmp != 0)
 		return cmp;
 	return client_info_compare(a->s.client_info, b->s.client_info);
@@ -373,12 +375,12 @@ mesh_serve_expired_lookup(struct module_qstate* qstate,
 		|| qstate->env->cfg->ignore_cd) && qstate->env->need_to_validate;
 	/* Lookup cache */
 	h = query_info_hash(lookup_qinfo, qstate->query_flags);
-	e = slabhash_lookup(qstate->env->msg_cache, h, lookup_qinfo, 0);
+	e = slabhash_lookup(qstate->query_view_env->msg_cache, h, lookup_qinfo, 0);
 	if(!e) return NULL;
 
 	key = (struct msgreply_entry*)e->key;
 	data = (struct reply_info*)e->data;
-	msg = tomsg(qstate->env, &key->key, data, qstate->region, timenow,
+	msg = tomsg(qstate, &key->key, data, qstate->region, timenow,
 		qstate->env->cfg->serve_expired, qstate->env->scratch);
 	if(!msg)
 		goto bail_out;
@@ -452,7 +454,7 @@ mesh_serve_expired_init(struct mesh_state* mstate, int timeout)
 
 void mesh_new_client(struct mesh_area* mesh, struct query_info* qinfo,
 	struct respip_client_info* cinfo, uint16_t qflags,
-	struct edns_data* edns, struct comm_reply* rep, uint16_t qid)
+	struct edns_data* edns, struct comm_reply* rep, uint16_t qid, struct view* view)
 {
 	struct mesh_state* s = NULL;
 	int unique = unique_mesh_state(edns->opt_list, mesh->env);
@@ -466,7 +468,7 @@ void mesh_new_client(struct mesh_area* mesh, struct query_info* qinfo,
 		r_buffer = rep->c->tcp_req_info->spool_buffer;
 	}
 	if(!unique)
-		s = mesh_area_find(mesh, cinfo, qinfo, qflags&(BIT_RD|BIT_CD), 0, 0);
+		s = mesh_area_find(mesh, cinfo, qinfo, qflags&(BIT_RD|BIT_CD), 0, 0, view);
 	/* does this create a new reply state? */
 	if(!s || s->list_select == mesh_no_list) {
 		if(!mesh_make_new_space(mesh, rep->c->buffer)) {
@@ -494,7 +496,7 @@ void mesh_new_client(struct mesh_area* mesh, struct query_info* qinfo,
 		struct rbnode_type* n;
 #endif
 		s = mesh_state_create(mesh->env, qinfo, cinfo,
-			qflags&(BIT_RD|BIT_CD), 0, 0);
+			qflags&(BIT_RD|BIT_CD), 0, 0, view);
 		if(!s) {
 			log_err("mesh_state_create: out of memory; SERVFAIL");
 			if(!inplace_cb_reply_servfail_call(mesh->env, qinfo, NULL, NULL,
@@ -600,7 +602,7 @@ servfail_mem:
 int 
 mesh_new_callback(struct mesh_area* mesh, struct query_info* qinfo,
 	uint16_t qflags, struct edns_data* edns, sldns_buffer* buf, 
-	uint16_t qid, mesh_cb_func_type cb, void* cb_arg)
+	uint16_t qid, mesh_cb_func_type cb, void* cb_arg, struct view* view)
 {
 	struct mesh_state* s = NULL;
 	int unique = unique_mesh_state(edns->opt_list, mesh->env);
@@ -610,7 +612,7 @@ mesh_new_callback(struct mesh_area* mesh, struct query_info* qinfo,
 	int was_noreply = 0;
 	int added = 0;
 	if(!unique)
-		s = mesh_area_find(mesh, NULL, qinfo, qflags&(BIT_RD|BIT_CD), 0, 0);
+		s = mesh_area_find(mesh, NULL, qinfo, qflags&(BIT_RD|BIT_CD), 0, 0, view);
 
 	/* there are no limits on the number of callbacks */
 
@@ -620,7 +622,7 @@ mesh_new_callback(struct mesh_area* mesh, struct query_info* qinfo,
 		struct rbnode_type* n;
 #endif
 		s = mesh_state_create(mesh->env, qinfo, NULL,
-			qflags&(BIT_RD|BIT_CD), 0, 0);
+			qflags&(BIT_RD|BIT_CD), 0, 0, view);
 		if(!s) {
 			return 0;
 		}
@@ -680,10 +682,11 @@ mesh_new_callback(struct mesh_area* mesh, struct query_info* qinfo,
  * 0 (false), in which case the new state is only made runnable so it
  * will not be run recursively on top of the current state. */
 static void mesh_schedule_prefetch(struct mesh_area* mesh,
-	struct query_info* qinfo, uint16_t qflags, time_t leeway, int run)
+	struct query_info* qinfo, uint16_t qflags, time_t leeway, int run, struct view* view)
 {
+		verbose(VERB_OPS, "Entering pre-fetch, %s", view->name);
 	struct mesh_state* s = mesh_area_find(mesh, NULL, qinfo,
-		qflags&(BIT_RD|BIT_CD), 0, 0);
+		qflags&(BIT_RD|BIT_CD), 0, 0, view);
 #ifdef UNBOUND_DEBUG
 	struct rbnode_type* n;
 #endif
@@ -704,7 +707,7 @@ static void mesh_schedule_prefetch(struct mesh_area* mesh,
 	}
 
 	s = mesh_state_create(mesh->env, qinfo, NULL,
-		qflags&(BIT_RD|BIT_CD), 0, 0);
+		qflags&(BIT_RD|BIT_CD), 0, 0, view);
 	if(!s) {
 		log_err("prefetch mesh_state_create: out of memory");
 		return;
@@ -751,9 +754,9 @@ static void mesh_schedule_prefetch(struct mesh_area* mesh,
 }
 
 void mesh_new_prefetch(struct mesh_area* mesh, struct query_info* qinfo,
-        uint16_t qflags, time_t leeway)
+        uint16_t qflags, time_t leeway, struct view* view)
 {
-	mesh_schedule_prefetch(mesh, qinfo, qflags, leeway, 1);
+	mesh_schedule_prefetch(mesh, qinfo, qflags, leeway, 1, view);
 }
 
 void mesh_report_reply(struct mesh_area* mesh, struct outbound_entry* e,
@@ -772,7 +775,7 @@ void mesh_report_reply(struct mesh_area* mesh, struct outbound_entry* e,
 struct mesh_state*
 mesh_state_create(struct module_env* env, struct query_info* qinfo,
 	struct respip_client_info* cinfo, uint16_t qflags, int prime,
-	int valrec)
+	int valrec, struct view* view)
 {
 	struct regional* region = alloc_reg_obtain(env->alloc);
 	struct mesh_state* mstate;
@@ -816,6 +819,14 @@ mesh_state_create(struct module_env* env, struct query_info* qinfo,
 			return NULL;
 		}
 	}
+
+	if(view == NULL){
+		//no view specified; fallback to server view.
+		mstate->s.query_view_env = &env->worker->daemon->views->server_view;
+	}
+	else 
+		mstate->s.query_view_env = view;
+	
 	/* remove all weird bits from qflags */
 	mstate->s.query_flags = (qflags & (BIT_RD|BIT_CD));
 	mstate->s.is_priming = prime;
@@ -1008,7 +1019,7 @@ int mesh_add_sub(struct module_qstate* qstate, struct query_info* qinfo,
 	/* find it, if not, create it */
 	struct mesh_area* mesh = qstate->env->mesh;
 	*sub = mesh_area_find(mesh, NULL, qinfo, qflags,
-		prime, valrec);
+		prime, valrec, qstate->query_view_env);
 	if(mesh_detect_cycle_found(qstate, *sub)) {
 		verbose(VERB_ALGO, "attach failed, cycle detected");
 		return 0;
@@ -1019,7 +1030,7 @@ int mesh_add_sub(struct module_qstate* qstate, struct query_info* qinfo,
 #endif
 		/* create a new one */
 		*sub = mesh_state_create(qstate->env, qinfo, NULL, qflags, prime,
-			valrec);
+			valrec, qstate->query_view_env);
 		if(!*sub) {
 			log_err("mesh_attach_sub: out of memory");
 			return 0;
@@ -1449,7 +1460,7 @@ void mesh_walk_supers(struct mesh_area* mesh, struct mesh_state* mstate)
 
 struct mesh_state* mesh_area_find(struct mesh_area* mesh,
 	struct respip_client_info* cinfo, struct query_info* qinfo,
-	uint16_t qflags, int prime, int valrec)
+	uint16_t qflags, int prime, int valrec, struct view* view)
 {
 	struct mesh_state key;
 	struct mesh_state* result;
@@ -1464,6 +1475,7 @@ struct mesh_state* mesh_area_find(struct mesh_area* mesh,
 	 * desire aggregation).*/
 	key.unique = NULL;
 	key.s.client_info = cinfo;
+	key.s.query_view_env = view;
 	
 	result = (struct mesh_state*)rbtree_search(&mesh->all, &key);
 	return result;
@@ -1680,7 +1692,7 @@ mesh_continue(struct mesh_area* mesh, struct mesh_state* mstate,
 			mesh_state_delete(&mstate->s);
 			if(qinfo) {
 				mesh_schedule_prefetch(mesh, qinfo, qflags,
-					0, 1);
+					0, 1, mstate->s.query_view_env);
 			}
 			return 0;
 		}
@@ -1814,7 +1826,7 @@ mesh_detect_cycle(struct module_qstate* qstate, struct query_info* qinfo,
 	struct mesh_area* mesh = qstate->env->mesh;
 	struct mesh_state* dep_m = NULL;
 	if(!mesh_state_is_unique(qstate->mesh_info))
-		dep_m = mesh_area_find(mesh, NULL, qinfo, flags, prime, valrec);
+		dep_m = mesh_area_find(mesh, NULL, qinfo, flags, prime, valrec, qstate->query_view_env);
 	return mesh_detect_cycle_found(qstate, dep_m);
 }
 

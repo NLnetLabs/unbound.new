@@ -325,6 +325,8 @@ struct module_env {
 	/* --- data --- */
 	/** config file with config options */
 	struct config_file* cfg;
+	/** view-specific information */
+	struct view* current_view_env;
 	/** shared message cache */
 	struct slabhash* msg_cache;
 	/** shared rrset cache */
@@ -665,6 +667,8 @@ struct module_qstate {
 
 	/** whether the reply should be dropped */
 	int is_drop;
+
+	struct view* query_view_env;
 };
 
 /** 

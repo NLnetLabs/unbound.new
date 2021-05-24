@@ -317,12 +317,12 @@ void local_zones_print(struct local_zones* zones);
  * if it needs to keep it beyond the lifetime of 'temp' or a dynamic update
  * to local zone data.
  */
-int local_zones_answer(struct local_zones* zones, struct module_env* env,
+int local_zones_answer(struct view* view, struct module_env* env,
 	struct query_info* qinfo, struct edns_data* edns, struct sldns_buffer* buf,
 	struct regional* temp, struct comm_reply* repinfo, uint8_t* taglist,
 	size_t taglen, uint8_t* tagactions, size_t tagactionssize,
 	struct config_strlist** tag_datas, size_t tag_datas_size,
-	char** tagname, int num_tags, struct view* view);
+	char** tagname, int num_tags);
 
 /** 
  * Answer using the local zone only (not local data used).

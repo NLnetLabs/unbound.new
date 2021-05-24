@@ -199,17 +199,15 @@ subnetmod_init(struct module_env *env, int id)
 	alloc_init(&sn_env->alloc, NULL, 0);
 	env->modinfo[id] = (void*)sn_env;
 	/* Copy msg_cache settings */
-	sn_env->subnet_msg_cache = slabhash_create(env->cfg->msg_cache_slabs,
-		HASH_DEFAULT_STARTARRAY, env->cfg->msg_cache_size,
-		msg_cache_sizefunc, query_info_compare, query_entry_delete,
-		subnet_data_delete, NULL);
-	slabhash_setmarkdel(sn_env->subnet_msg_cache, &subnet_markdel);
+	sn_env->subnet_msg_cache = msg_cache_create(env->cfg, subnet_data_delete);
 	if(!sn_env->subnet_msg_cache) {
 		log_err("subnet: could not create cache");
 		free(sn_env);
 		env->modinfo[id] = NULL;
 		return 0;
 	}
+	slabhash_setmarkdel(sn_env->subnet_msg_cache, &subnet_markdel);
+
 	/* whitelist for edns subnet capable servers */
 	sn_env->whitelist = ecs_whitelist_create();
 	if(!sn_env->whitelist ||

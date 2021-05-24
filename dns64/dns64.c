@@ -651,7 +651,7 @@ handle_event_moddone(struct module_qstate* qstate, int id)
 	/* Store the response in cache. */
 	if ( (!iq || !iq->started_no_cache_store) &&
 		qstate->return_msg && qstate->return_msg->rep &&
-		!dns_cache_store(qstate->env, &qstate->qinfo, qstate->return_msg->rep,
+		!dns_cache_store(qstate, &qstate->qinfo, qstate->return_msg->rep,
 		0, 0, 0, NULL, qstate->query_flags))
 		log_err("out of memory");
 
@@ -861,13 +861,13 @@ dns64_adjust_a(int id, struct module_qstate* super, struct module_qstate* qstate
 				return;
 			/* Delete negative AAAA record from cache stored by
 			 * the iterator module */
-			rrset_cache_remove(super->env->rrset_cache, dk->rk.dname, 
+			rrset_cache_remove(super->query_view_env->rrset_cache, dk->rk.dname, 
 					   dk->rk.dname_len, LDNS_RR_TYPE_AAAA, 
 					   LDNS_RR_CLASS_IN, 0);
 			/* Delete negative AAAA in msg cache for CNAMEs,
 			 * stored by the iterator module */
 			if(i != 0) /* if not the first RR */
-			    msg_cache_remove(super->env, dk->rk.dname,
+			    msg_cache_remove(super, dk->rk.dname,
 				dk->rk.dname_len, LDNS_RR_TYPE_AAAA,
 				LDNS_RR_CLASS_IN, 0);
 		} else {
@@ -985,7 +985,7 @@ dns64_inform_super(struct module_qstate* qstate, int id,
 
 	/* Store the generated response in cache. */
 	if ( (!super_dq || !super_dq->started_no_cache_store) &&
-		!dns_cache_store(super->env, &super->qinfo, super->return_msg->rep,
+		!dns_cache_store(super, &super->qinfo, super->return_msg->rep,
 		0, 0, 0, NULL, super->query_flags))
 		log_err("out of memory");
 }

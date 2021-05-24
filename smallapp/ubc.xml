@@ -1,0 +1,804 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+This file describes the commands, syntax, etc. for the unbound control protocol
+Commands are listed in the order they are to appear in the unbound-control
+man page and help message.
+The syntax for each entry is:
+<Command command="command-name" [ arg1="arg descr [ arg2="arg descr" ... ]]>
+	<Function distribute="yes | no | nothread">
+		Function name - prototype is:
+			void fnc(RES* ssl, struct worker* worker, char* arg)
+		The require attribute 'distribute' controls whether the command
+		is distributed to other processes:
+			yes       Always
+			no        Never
+			nothread  Only #ifdef THREADS_DISABLED
+		May be omitted if the "command" is not executed remotely,
+		e.g., start
+	</Function>
+	<CmdHelp [ ifdef="SYNBOL | ifndef="SYMBOL" ]>
+		Quick usage message, leading whitespace ignored
+		If ifdef/ifndef is present, the help strings are #ifdef'd/#ifndef'd,
+		respectively, for the specified symbol
+		An initial @ is also stripped - use to protect leading WS
+		Multiple lines will only print the command syntax
+		on the first line
+	</CmdHelp>
+	<ManPage>
+		Text for the man page description; leading whitespace ignored
+		An initial @ is also stripped - use to protect leading WS
+		This is troff text and is translated into man-page formatting
+	</ManPage>
+</Command>
+-->
+<CommandList>
+<Command command="start">
+	<!-- This command is not sent to unbound (obviously!) -->
+	<CmdHelp>
+		start server; runs unbound(8)
+	</CmdHelp>
+	<ManPage>
+		Start the server. Simply execs \fIunbound\fR(8).
+		The unbound executable is searched for in the \fBPATH\fR
+		set in the environment.
+		It is started with the config file
+		specified using \fI\-c\fR or the default config file.
+	</ManPage>
+</Command>
+<Command command="stop">
+	<Function distribute="no">
+		do_stop
+	</Function>
+	<CmdHelp>
+		stops the server
+	</CmdHelp>
+	<ManPage>
+		Stop the server. The server daemon exits.
+	</ManPage>
+</Command>
+<Command command="echo" view="yes" opt="[ arg ... ]">
+	<Function distribute="no">
+		do_echo
+	</Function>
+	<CmdHelp>
+		echo command line arguments
+	</CmdHelp>
+	<ManPage>
+		Echo the command line arguments.
+		Useful as a server connectivity test.
+	</ManPage>
+</Command>
+<Command command="reload">
+	<Function distribute="no">
+		do_reload
+	</Function>
+	<CmdHelp>
+		reloads the server
+		(this flushes data, stats, requestlist)
+	</CmdHelp>
+	<ManPage>
+		Reload the server.
+		This flushes the cache and reads the config file fresh.
+	</ManPage>
+</Command>
+<Command command="verbosity" arg="number">
+	<Function distribute="nothread">
+		do_verbosity
+	</Function>
+	<CmdHelp>
+		change logging detail
+	</CmdHelp>
+	<ManPage>
+		Change verbosity value for logging.
+		Same values as \fBverbosity\fR keyword in \fIunbound.conf\fR(5).
+		This new setting lasts until the server is issued a reload
+		(taken from config file again),
+		or the next verbosity control command.
+	</ManPage>
+</Command>
+<Command command="log_reopen">
+	<Function distribute="nothread">
+		do_log_reopen
+	</Function>
+	<CmdHelp>
+		close and open the logfile
+	</CmdHelp>
+	<ManPage>
+		Reopen the logfile, close and open it.
+		Useful for logrotation to make the daemon release the file
+		it is logging to.
+		If you are using syslog it will attempt to close and open
+		the syslog (which may not work if chrooted).
+	</ManPage>
+</Command>
+<Command command="stats" view="yes">
+	<Function distribute="no">
+		do_stats_reset
+	</Function>
+	<CmdHelp>
+		print statistics
+	</CmdHelp>
+	<ManPage>
+		Print statistics, reset the internal counters to zero.
+		This can be controlled using the \fBstatistics\-cumulative\fR
+		config statement. 
+		A view may be specified only if \fBstatistics\-cumulative\fR
+		is set to \fByes\fR;
+		otherwise, the command will fail.
+		Statistics are printed with one [name]: [value] per line.
+	</ManPage>
+</Command>
+<Command command="stats_noreset" view="yes">
+	<Function distribute="no">
+		do_stats_noreset
+	</Function>
+	<CmdHelp>
+		peek at statistics
+	</CmdHelp>
+	<ManPage>
+		Peek at statistics.
+		Prints them like the \fBstats\fR command does,
+		but does not reset the internal counters to zero.
+	</ManPage>
+</Command>
+<Command command="stats_shm">
+	<!-- stats_shm is not sent to the server and conditionally compiled -->
+	<CmdHelp ifdef="HAVE_SHMGET">
+		print statistics using shm
+	</CmdHelp>
+	<ManPage>
+		Print statistics using shm.
+		Requires compiling with shared memory enabled
+		and configuring the server to use it
+	</ManPage>
+</Command>
+<Command command="status">
+	<Function distribute="no">
+		do_status
+	</Function>
+	<CmdHelp>
+		display status of server
+	</CmdHelp>
+	<ManPage>
+		Display server status.
+		Exit code 3 if not running
+		(the connection to the port is refused),
+		1 on error, 0 if running.
+	</ManPage>
+</Command>
+<Command command="local_zone" view="yes" arg1="name" arg2="type">
+	<Function distribute="nothread">
+		do_zone_add
+	</Function>
+	<CmdHelp>
+		add new local zone
+	</CmdHelp>
+	<ManPage>
+		Add new local zone with name and type.
+		Like \fBlocal\-zone\fR config statement.
+		If the zone already exists, the type is changed to the given argument.
+	</ManPage>
+</Command>
+<Command command="local_zone_remove" view="yes" arg1="name">
+	<Function distribute="nothread">
+		do_zone_remove
+	</Function>
+	<CmdHelp>
+		remove local zone and its contents
+	</CmdHelp>
+	<ManPage>
+		Remove the local zone with the given name.
+		Removes all local data inside it.
+		If the zone does not exist, the command succeeds.
+	</ManPage>
+</Command>
+<Command command="local_data" view="yes" arg1="RR" arg2="data ...">
+	<Function distribute="nothread">
+		do_data_add
+	</Function>
+	<CmdHelp>
+		add local data, for example
+		local_data www.example.com A 192.0.2.1
+	</CmdHelp>
+	<ManPage>
+		Add new local data, the given resource record.
+		Like \fBlocal\-data\fR config statement,
+		except for when no covering zone exists.
+		In that case this remote control command creates a transparent zone
+		with the same name as this record.
+		This command is not good at returning detailed syntax errors.
+	</ManPage>
+</Command>
+<Command command="local_data_remove" view="yes" arg1="name">
+	<Function distribute="nothread">
+		do_data_remove
+	</Function>
+	<CmdHelp>
+		remove local RR data from name
+	</CmdHelp>
+	<ManPage>
+		Remove all RR data from local name.
+		If the name already has no items, nothing happens.
+		Often results in NXDOMAIN for the name (in a static zone),
+		but if the name has become an empty nonterminal
+		(there is still data in domain names below the removed name),
+		NOERROR nodata answers are the result for that name.
+	</ManPage>
+</Command>
+<Command command="local_zones, local_zones_remove, local_datas, local_datas_remove">
+	<!-- The local_* plurals have an irregular help message -->
+	<CmdHelp>
+		@
+		same, but read list from stdin
+		(one entry per line).
+	</CmdHelp>
+</Command>
+<!-- These define the functions and man page descriptions for the above -->
+<Command command="local_zones" view="yes">
+	<Function distribute="nothread">
+		do_zones_add
+	</Function>
+	<ManPage>
+		Add local zones read from stdin of unbound\-control.
+		Input is read per line,
+		with name space type on a line.
+		For bulk additions.
+	</ManPage>
+</Command>
+<Command command="local_zones_remove" view="yes">
+	<Function distribute="nothread">
+		do_zones_remove
+	</Function>
+	<ManPage>
+		Remove local zones read from stdin of unbound\-control.
+		Input is one name per line.
+		For bulk removals.
+	</ManPage>
+</Command>
+<Command command="local_datas" view="yes">
+	<Function distribute="nothread">
+		do_datas_add
+	</Function>
+	<ManPage>
+		Add local data RRs read from stdin of unbound\-control.
+		Input is one RR per line.
+		For bulk additions.
+	</ManPage>
+</Command>
+<Command command="local_datas_remove" view="yes">
+	<Function distribute="nothread">
+		do_datas_remove
+	</Function>
+	<ManPage>
+		Remove local data RRs read from stdin of unbound\-control.
+		Input is one name per line.
+		For bulk removals.
+	</ManPage>
+</Command>
+<Command command="dump_cache" view="yes">
+	<Function distribute="no">
+		do_dump_cache
+	</Function>
+	<CmdHelp>
+		print cache to stdout
+	</CmdHelp>
+	<ManPage>
+		The contents of the cache is printed in a text format to stdout.
+		You can redirect it to a file to store the cache in a file.
+	</ManPage>
+</Command>
+<Command command="load_cache">
+	<Function distribute="no">
+		do_load_cache
+	</Function>
+	<CmdHelp>
+		load cache from stdin
+	</CmdHelp>
+	<ManPage>
+		The contents of the cache is loaded from stdin.
+		Uses the same format as dump_cache uses.
+		Loading the cache with old, or wrong data
+		can result in old or wrong data returned to clients.
+		Loading data into the cache in this way is supported
+		in order to aid with debugging.
+	</ManPage>
+</Command>
+<Command command="lookup" arg1="name">
+	<Function distribute="no">
+		do_lookup
+	</Function>
+	<CmdHelp>
+		print nameservers for name
+	</CmdHelp>
+	<ManPage>
+		Print to stdout the name servers that would be used
+		to look up the name specified.
+	</ManPage>
+</Command>
+<Command command="flush" view="yes" arg1="name">
+	<Function distribute="nothread">
+		do_flush_name
+	</Function>
+	<CmdHelp>
+		flushes common types for name from cache
+		types:  A, AAAA, MX, PTR, NS,
+		SOA, CNAME, DNAME, SRV, NAPTR
+	</CmdHelp>
+	<ManPage>
+		Remove the name from the cache. Removes the types
+		A, AAAA, NS, SOA, CNAME, DNAME, MX, PTR, SRV and NAPTR.
+		Because that is fast to do.
+		Other record types can be removed using 
+		.B flush_type 
+		or 
+		.B flush_zone\fR.
+	</ManPage>
+</Command>
+<Command command="flush_type" view="yes" arg1="name" arg2="type">
+	<Function distribute="nothread">
+		do_flush_type
+	</Function>
+	<CmdHelp>
+		flush name, type from cache
+	</CmdHelp>
+	<ManPage>
+		Remove the name, type information from the cache.
+	</ManPage>
+</Command>
+<Command command="flush_zone" view="yes" arg1="name">
+	<Function distribute="nothread">
+		do_flush_zone
+	</Function>
+	<CmdHelp>
+		flush everything at or under name
+		from rr and dnssec caches
+	</CmdHelp>
+	<ManPage>
+		Remove all information at or below the name from the cache.
+		The rrsets and key entries are removed so that new lookups will be performed.
+		This needs to walk and inspect the entire cache,
+		and is a slow operation.
+		The entries are set to expired in the implementation of this command
+		(so, with serve\-expired enabled, it will serve that information
+		but schedule a prefetch for new information).
+	</ManPage>
+</Command>
+<Command command="flush_bogus" view="yes">
+	<Function distribute="nothread">
+		do_flush_bogus
+	</Function>
+	<CmdHelp>
+		flush all bogus data
+	</CmdHelp>
+	<ManPage>
+		Remove all bogus data from the cache.
+	</ManPage>
+</Command>
+<Command command="flush_negative" view="yes">
+	<Function distribute="nothread">
+		do_flush_negative
+	</Function>
+	<CmdHelp>
+		flush all negative data
+	</CmdHelp>
+	<ManPage>
+		Remove all negative data from the cache.
+		This is nxdomain answers, nodata answers and servfail answers.
+		Also removes bad key entries
+		(which could be due to failed lookups)
+		from the dnssec key cache,
+		and iterator last-resort lookup failures from the rrset cache.
+	</ManPage>
+</Command>
+<Command command="flush_stats" view="yes">
+	<Function distribute="yes">
+		do_flush_stats
+	</Function>
+	<CmdHelp>
+		flush statistics, make zerp
+	</CmdHelp>
+	<ManPage>
+		Reset statistics to zero.
+	</ManPage>
+</Command>
+<Command command="flush_requestlist">
+	<Function distribute="yes">
+		do_flush_requestlist
+	</Function>
+	<CmdHelp>
+		drop queries that are worked on
+	</CmdHelp>
+	<ManPage>
+		Drop the queries that are worked on.
+		Stops working on the queries that the server is working on now.
+		The cache is unaffected.
+		No reply is sent for those queries,
+		probably making those users request again later.
+		Useful to make the server restart working on queries with new settings,
+		such as a higher verbosity level.
+	</ManPage>
+</Command>
+<Command command="dump_requestlist">
+	<Function distribute="nothread">
+		do_dump_requestlist
+	</Function>
+	<CmdHelp>
+		show what is worked on by first thread
+	</CmdHelp>
+	<ManPage>
+		Show what is worked on.
+		Prints all queries that the server is currently working on.
+		Prints the time that users have been waiting.
+		For internal requests, no time is printed.
+		And then prints out the module status.
+		This prints the queries from the first thread,
+		and not queries that are being serviced from other threads.
+	</ManPage>
+</Command>
+<Command command="flush_infra" arg1="[ all | IP ]">
+	<Function distribute="nothread">
+		do_flush_infra
+	</Function>
+	<CmdHelp>
+		remove ping, edns for one IP or all
+	</CmdHelp>
+	<ManPage>
+		If \fIall\fR then entire infra cache is emptied.
+		If a specific \fIIP\fR address,
+		the entry for that address is removed from the cache.
+		It contains EDNS, RRT and lameness data.
+	</ManPage>
+</Command>
+<Command command="dump_infra">
+	<Function distribute="nothread">
+		do_dump_infra
+	</Function>
+	<CmdHelp>
+		show RTT and edns entries
+	</CmdHelp>
+	<ManPage>
+		Show the contents of the infra cache.
+	</ManPage>
+</Command>
+<Command command="set_option" arg1="opt:" arg2="val">
+	<Function distribute="nothread">
+		do_set_option
+	</Function>
+	<CmdHelp>
+		set option to value, no reload
+	</CmdHelp>
+	<ManPage>
+		Set the option to the given value without a reload.
+		The cache is therefore not flushed.
+		The option must end with a ':'
+		and whitespace must be between the option and the value.
+		Some values may not have an effect if set this way,
+		the new values are not written to the config file,
+		not all options are supported.
+		This is different from the set_option call in libunbound,
+		where all values work because unbound has not been initialized.
+		.IP
+		The values that work are: statistics\-interval, statistics\-cumulative,
+		do\-not\-query\-localhost, harden\-short\-bufsize, harden\-large\-queries,
+		harden\-glue, harden\-dnssec\-stripped, harden\-below\-nxdomain,
+		harden\-referral\-path, prefetch, prefetch\-key, log\-queries,
+		hide\-identity, hide\-version, identity, version, val\-log\-level,
+		val\-log\-squelch, ignore\-cd\-flag, add\-holddown, del\-holddown,
+		keep\-missing, tcp\-upstream, ssl\-upstream, max\-udp\-size, ratelimit,
+		ip\-ratelimit, cache\-max\-ttl, cache\-min\-ttl, cache\-max\-negative\-ttl.
+	</ManPage>
+</Command>
+<Command command="get_option" arg1="opt">
+	<Function distribute="nothread">
+		do_get_option
+	</Function>
+	<CmdHelp>
+		get option value
+	</CmdHelp>
+	<ManPage>
+		Get the value of the option.
+		Give the option name without a trailing ':'.
+		The value is printed.
+		If the value is "",
+		nothing is printed and the connection closes.
+		On error 'error ...' is printed
+		(it gives a syntax error on unknown option).
+		For some options a list of values,
+		one on each line, is printed.
+		The options are shown from the config file as modified with set_option.
+		For some options an override may have been taken
+		that does not show up with this command,
+		not results from e.g. the verbosity and forward control commands.
+		Not all options work,
+		see list_stubs, list_forwards, list_local_zones
+		and list_local_data for those.
+	</ManPage>
+</Command>
+<Command command="list_stubs" view="yes">
+	<Function distribute="no">
+		do_list_stubs
+	</Function>
+	<CmdHelp>
+		list stub-zones and root hints in use
+	</CmdHelp>
+	<ManPage>
+		List the stub zones in use.
+		These are printed one by one to the output.
+		This includes the root hints in use.
+	</ManPage>
+</Command>
+<Command command="list_forwards" view="yes">
+	<Function distribute="no">
+		do_list_forwards
+	</Function>
+	<CmdHelp>
+		list forward-zones in use
+	</CmdHelp>
+	<ManPage>
+		List the forward zones in use.
+		These are printed zone by zone to the output.
+	</ManPage>
+</Command>
+<Command command="list_insecure">
+	<Function distribute="no">
+		do_insecure_list
+	</Function>
+	<CmdHelp>
+		list domain-insecure zones
+	</CmdHelp>
+	<ManPage>
+		List the zones with domain\-insecure.
+	</ManPage>
+</Command>
+<Command command="list_local_zones" view="yes">
+	<Function distribute="no">
+		do_list_local_zones
+	</Function>
+	<CmdHelp>
+		list local-zones in use
+	</CmdHelp>
+	<ManPage>
+		List the local zones in use.
+		These are printed one per line with zone type.
+	</ManPage>
+</Command>
+<Command command="list_local_data" view="yes">
+	<Function distribute="no">
+		do_list_local_data
+	</Function>
+	<CmdHelp>
+		list local-data RRs in use
+	</CmdHelp>
+	<ManPage>
+		List the local data RRs in use.
+		The resource records are printed.
+	</ManPage>
+</Command>
+<Command command="list_views">
+	<Function distribute="no">
+		do_list_views
+	</Function>
+	<CmdHelp>
+		list configured views
+	</CmdHelp>
+	<ManPage>
+		List the configured views, one per line.
+	</ManPage>
+</Command>
+<Command command="insecure_add" arg1="zone">
+	<Function distribute="yes">
+		do_insecure_add
+	</Function>
+	<CmdHelp>
+		add domain-insecure zone
+	</CmdHelp>
+	<ManPage>
+		Add a \fBdomain\-insecure\fR for the given zone,
+		like the statement in unbound.conf.
+		Adds to the running unbound without affecting the cache contents
+		(which may still be bogus, use \fBflush_zone\fR to remove it),
+		does not affect the config file.
+	</ManPage>
+</Command>
+<Command command="insecure_remove" arg1="zone">
+	<Function distribute="yes">
+		do_insecure_remove
+	</Function>
+	<CmdHelp>
+		remove domain-insecure zone
+	</CmdHelp>
+	<ManPage>
+		Removes domain\-insecure for the given zone.
+	</ManPage>
+</Command>
+<Command command="ratelimit_list" opt1="[+a]">
+	<Function distribute="no">
+		do_ratelimit_list
+	</Function>
+	<CmdHelp>
+		list ratelimited domains
+		+a  list all, also not ratelimited
+	</CmdHelp>
+	<ManPage>
+		List the domains that are ratelimited.
+		Printed one per line with current estimated qps and qps limit from config.
+		With +a it prints all domains,
+		not just the ratelimited domains,
+		with their estimated qps.
+		The ratelimited domains return an error
+		for uncached (new) queries, but cached queries work as normal.
+	</ManPage>
+</Command>
+<Command command="ip_ratelimit_list" opt1="[+a]">
+	<Function distribute="no">
+		do_ip_ratelimit_list
+	</Function>
+	<CmdHelp>
+		list ratelimited ip addresses
+		+a  list all, also not ratelimited
+	</CmdHelp>
+	<ManPage>
+		List the ip addresses that are ratelimited.
+		Printed one per line with current estimated qps and qps limit from config.
+		With +a it prints all ips,
+		not just the ratelimited ips,
+		with their estimated qps.
+		The ratelimited ips are dropped before checking the cache.
+	</ManPage>
+</Command>
+<Command command="list_auth_zones">
+	<Function distribute="no">
+		do_list_auth_zones
+	</Function>
+	<CmdHelp>
+		list auth zones
+	</CmdHelp>
+	<ManPage>
+		List the auth zones that are configured.
+		Printed one per line with a status,
+		indicating if the zone is expired and current serial number.
+	</ManPage>
+</Command>
+<Command command="auth_zone_reload" arg1="zone">
+	<Function distribute="no">
+		do_auth_zone_reload
+	</Function>
+	<CmdHelp>
+		reload auth zone from zonefile
+	</CmdHelp>
+	<ManPage>
+		Reload the auth zone from zonefile.
+		The zonefile is read in overwriting the current contents
+		of the zone in memory.
+		This changes the auth zone contents itself, not the cache contents.
+		Such cache contents exists if you set unbound to validate
+		with for-upstream: yes and that can be cleared with \fBflush_zone\fR \fIzone\fR.
+	</ManPage>
+</Command>
+<Command command="auth_zone_transfer" arg1="zone">
+	<Function distribute="no">
+		do_auth_zone_transfer
+	</Function>
+	<CmdHelp>
+		transfer auth zone from master
+	</CmdHelp>
+	<ManPage>
+		Transfer the auth zone from master.
+		The auth zone probe sequence is started,
+		where the masters are probed to see if they have an updated zone
+		(with the SOA serial check).
+		And then the zone is transferred for a newer zone version.
+	</ManPage>
+</Command>
+<Command command="rpz_enable" arg1="zone">
+	<Function distribute="nothread">
+		do_rpz_enable
+	</Function>
+	<CmdHelp>
+		Enable the RPZ zone if it had previously
+		been disabled
+	</CmdHelp>
+	<ManPage>
+		Enable the RPZ zone if it had previously been disabled.
+	</ManPage>
+</Command>
+<Command command="rpz_disable" arg1="zone">
+	<Function distribute="nothread">
+		do_rpz_disable
+	</Function>
+	<CmdHelp>
+		Disable the RPZ zone
+	</CmdHelp>
+	<ManPage>
+		Disable the RPZ zone.
+	</ManPage>
+</Command>
+<Command command="view_list_local_zones" arg1="view">
+	<Function distribute="no">
+		do_view_list_local_zones
+	</Function>
+	<CmdHelp>
+		synonym for list_local_zones.view-name
+	</CmdHelp>
+	<ManPage>
+		Deprecated - synonym for \fBlist_local_zones\fR.\fIview\fR
+	</ManPage>
+</Command>
+<Command command="view_local_zone" arg1="view" arg2="name" arg3="type">
+	<Function distribute="nothread">
+		do_view_zone_add
+	</Function>
+	<CmdHelp>
+		synonym for local_zone.view-name
+	</CmdHelp>
+	<ManPage>
+		Deprecated - synonym for \fBlocal_zone\fR.\fIview\fR
+	</ManPage>
+</Command>
+<Command command="view_local_zone_remove" arg1="view" arg2="name">
+	<Function distribute="nothread">
+		do_view_zone_remove
+	</Function>
+	<CmdHelp>
+		synonym for local_zone_remove.view-name
+	</CmdHelp>
+	<ManPage>
+		Deprecated - synonym for \fBlocal_zone_remove\fR.\fIview\fR
+	</ManPage>
+</Command>
+<Command command="view_list_local_data" arg1="view">
+	<Function distribute="no">
+		do_view_list_local_data
+	</Function>
+	<CmdHelp>
+		synonym for list_local_data.view-name
+	</CmdHelp>
+	<ManPage>
+		Deprecated - synonym for \fBlist_local_data\fR.\fIview\fR
+	</ManPage>
+</Command>
+<Command command="view_local_data" arg1="view" arg2="RR" arg3="data">
+	<Function distribute="nothread">
+		do_view_data_add
+	</Function>
+	<CmdHelp>
+		synonym for local_data.view-name
+	</CmdHelp>
+	<ManPage>
+		Deprecated - synonym for \fBlocal_data\fR.\fIview\fR
+	</ManPage>
+</Command>
+<Command command="view_local_data_remove" arg1="view" arg2="name">
+	<Function distribute="nothread">
+		do_view_data_remove
+	</Function>
+	<CmdHelp>
+		synonym for local_data_remove.view-name
+	</CmdHelp>
+	<ManPage>
+		Deprecated - synonym for \fBlocal_data_remove\fR.\fIview\fR
+	</ManPage>
+</Command>
+<Command command="view_local_datas" arg1="view">
+	<Function distribute="nothread">
+		do_view_datas_add
+	</Function>
+	<CmdHelp>
+		synonym for local_datas.view-name
+	</CmdHelp>
+	<ManPage>
+		Deprecated - synonym for \fBlocal_datas\fR.\fIview\fR
+	</ManPage>
+</Command>
+<Command command="view_local_datas_remove" arg1="view" arg2="name">
+	<Function distribute="nothread">
+		do_view_datas_remove
+	</Function>
+	<CmdHelp>
+		synonym for local_datas_remove.view-name
+	</CmdHelp>
+	<ManPage>
+		Deprecated - synonym for \fBlocal_datas_remove\fR.\fIview\fR
+	</ManPage>
+</Command>
+</CommandList>

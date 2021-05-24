@@ -288,21 +288,15 @@ static void
 view_and_respipchecks(struct config_file* cfg)
 {
 	struct views* views = NULL;
-	struct respip_set* respip = NULL;
 	int ignored = 0;
 	if(!(views = views_create()))
 		fatal_exit("Could not create views: out of memory");
-	if(!(respip = respip_set_create()))
-		fatal_exit("Could not create respip set: out of memory");
 	if(!views_apply_cfg(views, cfg))
 		fatal_exit("Could not set up views");
-	if(!respip_global_apply_cfg(respip, cfg))
-		fatal_exit("Could not setup respip set");
-	if(!respip_views_apply_cfg(views, cfg, &ignored))
+	if(!respip_views_apply_cfg(views, &ignored))
 		fatal_exit("Could not setup per-view respip sets");
 	acl_view_tag_checks(cfg, views);
 	views_delete(views);
-	respip_set_delete(respip);
 }
 
 /** emit warnings for IP in hosts */
@@ -827,22 +821,30 @@ morechecks(struct config_file* cfg)
 static void
 check_fwd(struct config_file* cfg)
 {
+#if	0
+	// This is now handled in the views
+
 	struct iter_forwards* fwd = forwards_create();
 	if(!fwd || !forwards_apply_cfg(fwd, cfg)) {
 		fatal_exit("Could not set forward zones");
 	}
 	forwards_delete(fwd);
+#endif
 }
 
 /** check hints */
 static void
 check_hints(struct config_file* cfg)
 {
+#if	0
+	// This is now handled in the views
+
 	struct iter_hints* hints = hints_create();
 	if(!hints || !hints_apply_cfg(hints, cfg)) {
 		fatal_exit("Could not set root or stub hints");
 	}
 	hints_delete(hints);
+#endif
 }
 
 /** check auth zones */

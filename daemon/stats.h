@@ -49,6 +49,7 @@ struct comm_point;
 struct comm_reply;
 struct edns_data;
 struct sldns_buffer;
+struct view_stats;
 
 /* stats struct */
 #include "libunbound/unbound.h"
@@ -61,10 +62,14 @@ struct sldns_buffer;
 void server_stats_init(struct ub_server_stats* stats, struct config_file* cfg);
 
 /** add query if it missed the cache */
-void server_stats_querymiss(struct ub_server_stats* stats, struct worker* worker);
+void server_stats_querymiss(struct ub_server_stats* stats,
+                            struct view_stats* vs,
+                            struct worker* worker);
 
 /** add query if was cached and also resulted in a prefetch */
-void server_stats_prefetch(struct ub_server_stats* stats, struct worker* worker);
+void server_stats_prefetch(struct ub_server_stats* stats,
+                           struct view_stats* vs,
+                           struct worker* worker);
 
 /** display the stats to the log */
 void server_stats_log(struct ub_server_stats* stats, struct worker* worker,
@@ -75,10 +80,14 @@ void server_stats_log(struct ub_server_stats* stats, struct worker* worker,
  * @param worker: the worker that is executing (the first worker).
  * @param who: on who to get the statistics info.
  * @param s: the stats block to fill in.
+ * @param vs: vector of view stats, one per view
  * @param reset: if stats can be reset.
  */
-void server_stats_obtain(struct worker* worker, struct worker* who,
-	struct ub_stats_info* s, int reset);
+void server_stats_obtain(struct worker* worker,
+                         struct worker* who,
+                         struct ub_stats_info* s,
+                         struct view_stats* vs,
+                         int reset);
 
 /**
  * Compile stats into structure for this thread worker.

@@ -48,6 +48,7 @@ struct query_info;
 struct regional;
 struct module_env;
 struct iter_env;
+struct module_qstate;
 
 /**
  * Cleanup the passed dns message.
@@ -64,6 +65,6 @@ struct iter_env;
  */
 int scrub_message(struct sldns_buffer* pkt, struct msg_parse* msg, 
 	struct query_info* qinfo, uint8_t* zonename, struct regional* regional,
-	struct module_env* env, struct iter_env* ie);
+	struct module_qstate* qstate, struct iter_env* ie);
 
 #endif /* ITERATOR_ITER_SCRUB_H */

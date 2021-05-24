@@ -48,6 +48,8 @@ struct query_info;
 struct reply_info;
 struct regional;
 struct delegpt;
+struct slabhash;
+struct config_file;
 
 /** Flags to control behavior of dns_cache_store() and dns_cache_store_msg().
  *  Must be an unsigned 32-bit value larger than 0xffff */
@@ -64,6 +66,25 @@ struct dns_msg {
 	/** reply info - ptr to packed repinfo structure */
 	struct reply_info *rep;
 };
+
+/**
+ * Create a message cache per the specified configuration
+ *
+ * @param cfg: configuration file parameters
+ * @param del: data delete function
+ * @return slabhash of sufficient size, or NULL on error
+ */
+struct slabhash *msg_cache_create(struct config_file *cfg,
+                                  lruhash_deldatafunc_type del);
+
+/**
+ * Adjust or create a message cache per the specified configuration
+ *
+ * @param s: current slabhash (or NULL)
+ * @param cfg: configuration file parameters
+ * @return slabhash of sufficient size, or NULL on error
+ */
+struct slabhash *msg_cache_adjust(struct slabhash *s, struct config_file *cfg);
 
 /**
  * Allocate a dns_msg with malloc/alloc structure and store in dns cache.
@@ -90,7 +111,7 @@ struct dns_msg {
  *   (See DNSCACHE_STORE_xxx flags).
  * @return 0 on alloc error (out of memory).
  */
-int dns_cache_store(struct module_env* env, struct query_info* qinf,
+int dns_cache_store(struct module_qstate* qstate, struct query_info* qinf,
         struct reply_info* rep, int is_referral, time_t leeway, int pside,
 	struct regional* region, uint32_t flags);
 
@@ -114,7 +135,7 @@ int dns_cache_store(struct module_env* env, struct query_info* qinf,
  * @param flags: customization flags for the cache policy.
  * @param region: to allocate into for qmsg.
  */
-void dns_cache_store_msg(struct module_env* env, struct query_info* qinfo,
+void dns_cache_store_msg(struct module_qstate* qstate, struct query_info* qinfo,
 	hashvalue_type hash, struct reply_info* rep, time_t leeway, int pside,
 	struct reply_info* qrep, uint32_t flags, struct regional* region);
 
@@ -131,7 +152,7 @@ void dns_cache_store_msg(struct module_env* env, struct query_info* qinfo,
  * @param timenow: the time now, for checking if TTL on cache entries is OK.
  * @return new delegation or NULL on error or if not found in cache.
  */
-struct delegpt* dns_cache_find_delegation(struct module_env* env, 
+struct delegpt* dns_cache_find_delegation(struct module_qstate* qstate, 
 	uint8_t* qname, size_t qnamelen, uint16_t qtype, uint16_t qclass, 
 	struct regional* region, struct dns_msg** msg, time_t timenow);
 
@@ -148,7 +169,7 @@ struct delegpt* dns_cache_find_delegation(struct module_env* env,
  *	logic.
  * @param scratch: where to allocate temporary data.
  * */
-struct dns_msg* tomsg(struct module_env* env, struct query_info* q,
+struct dns_msg* tomsg(struct module_qstate* qstate, struct query_info* q,
 	struct reply_info* r, struct regional* region, time_t now,
 	int allow_expired, struct regional* scratch);
 
@@ -168,7 +189,7 @@ struct dns_msg* tomsg(struct module_env* env, struct query_info* q,
  * 	or NULL on error or if not found in cache.
  *	TTLs are made relative to the current time.
  */
-struct dns_msg* dns_cache_lookup(struct module_env* env,
+struct dns_msg* dns_cache_lookup(struct module_qstate* qstate,
 	uint8_t* qname, size_t qnamelen, uint16_t qtype, uint16_t qclass,
 	uint16_t flags, struct regional* region, struct regional* scratch,
 	int no_partial);
@@ -181,7 +202,7 @@ struct dns_msg* dns_cache_lookup(struct module_env* env,
  * @param dp: delegation point to fill missing entries.
  * @return false on alloc failure.
  */
-int cache_fill_missing(struct module_env* env, uint16_t qclass, 
+int cache_fill_missing(struct module_qstate* qstate, uint16_t qclass, 
 	struct regional* region, struct delegpt* dp);
 
 /**
@@ -232,12 +253,12 @@ int dns_msg_ansadd(struct dns_msg* msg, struct regional* region,
  * @param flags: flags with BIT_CD for AAAA queries in dns64 translation.
  * @return false if not in cache. true if added.
  */
-int dns_cache_prefetch_adjust(struct module_env* env, struct query_info* qinfo,
+int dns_cache_prefetch_adjust(struct module_qstate* qstate, struct query_info* qinfo,
         time_t adjust, uint16_t flags);
 
 /** lookup message in message cache
  * the returned nonNULL entry is locked and has to be unlocked by the caller */
-struct msgreply_entry* msg_cache_lookup(struct module_env* env,
+struct msgreply_entry* msg_cache_lookup(struct module_qstate* qstate,
 	uint8_t* qname, size_t qnamelen, uint16_t qtype, uint16_t qclass,
 	uint16_t flags, time_t now, int wr);
 
@@ -250,7 +271,7 @@ struct msgreply_entry* msg_cache_lookup(struct module_env* env,
  * @param qclass: query class, host order.
  * @param flags: flags
  */
-void msg_cache_remove(struct module_env* env, uint8_t* qname, size_t qnamelen,
+void msg_cache_remove(struct module_qstate* qstate, uint8_t* qname, size_t qnamelen,
 	uint16_t qtype, uint16_t qclass, uint16_t flags);
 
 #endif /* SERVICES_CACHE_DNS_H */

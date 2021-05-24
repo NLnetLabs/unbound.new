@@ -90,17 +90,25 @@ void server_stats_init(struct ub_server_stats* stats, struct config_file* cfg)
 	stats->extended = cfg->stat_extended;
 }
 
-void server_stats_querymiss(struct ub_server_stats* stats, struct worker* worker)
+void
+server_stats_querymiss(struct ub_server_stats* stats,
+                       struct view_stats* vs,
+                       struct worker* worker)
 {
 	stats->num_queries_missed_cache++;
+	vs->num_queries_missed_cache++;
 	stats->sum_query_list_size += worker->env.mesh->all.count;
 	if((long long)worker->env.mesh->all.count > stats->max_query_list_size)
 		stats->max_query_list_size = (long long)worker->env.mesh->all.count;
 }
 
-void server_stats_prefetch(struct ub_server_stats* stats, struct worker* worker)
+void
+server_stats_prefetch(struct ub_server_stats* stats,
+                      struct view_stats* vs,
+                      struct worker* worker)
 {
 	stats->num_queries_prefetch++;
+	vs->num_queries_prefetch++;
 	/* changes the query list size so account that, like a querymiss */
 	stats->sum_query_list_size += worker->env.mesh->all.count;
 	if((long long)worker->env.mesh->all.count > stats->max_query_list_size)
@@ -131,31 +139,35 @@ void server_stats_log(struct ub_server_stats* stats, struct worker* worker,
 }
 
 
-#ifdef CLIENT_SUBNET
-/** Set the EDNS Subnet stats. */
+/** Set the EDNS Subnet stats (zero if not enabled) */
 static void
-set_subnet_stats(struct worker* worker, struct ub_server_stats* svr,
-	int reset)
+set_subnet_stats(struct worker* worker,
+                 struct ub_server_stats* svr,
+                 int reset)
 {
+#ifdef CLIENT_SUBNET
 	int m = modstack_find(&worker->env.mesh->mods, "subnet");
 	struct subnet_env* sne;
 	if(m == -1)
 		return;
 	sne = (struct subnet_env*)worker->env.modinfo[m];
-	if(reset && !worker->env.cfg->stat_cumulative) {
+	if(reset) {
 		lock_rw_wrlock(&sne->biglock);
 	} else {
 		lock_rw_rdlock(&sne->biglock);
 	}
 	svr->num_query_subnet = (long long)(sne->num_msg_nocache + sne->num_msg_cache);
 	svr->num_query_subnet_cache = (long long)sne->num_msg_cache;
-	if(reset && !worker->env.cfg->stat_cumulative) {
+	if(reset) {
 		sne->num_msg_cache = 0;
 		sne->num_msg_nocache = 0;
 	}
 	lock_rw_unlock(&sne->biglock);
+#else
+	svr->num_query_subnet = 0;
+	svr->num_query_subnet_cache = 0;
+#endif
 }
-#endif /* CLIENT_SUBNET */
 
 /** Set the neg cache stats. */
 static void
@@ -174,7 +186,7 @@ set_neg_cache_stats(struct worker* worker, struct ub_server_stats* svr,
 	lock_basic_lock(&neg->lock);
 	svr->num_neg_cache_noerror = (long long)neg->num_neg_cache_noerror;
 	svr->num_neg_cache_nxdomain = (long long)neg->num_neg_cache_nxdomain;
-	if(reset && !worker->env.cfg->stat_cumulative) {
+	if(reset) {
 		neg->num_neg_cache_noerror = 0;
 		neg->num_neg_cache_nxdomain = 0;
 	}
@@ -193,7 +205,7 @@ get_rrset_bogus(struct worker* worker, int reset)
 	ve = (struct val_env*)worker->env.modinfo[m];
 	lock_basic_lock(&ve->bogus_lock);
 	r = ve->num_rrset_bogus;
-	if(reset && !worker->env.cfg->stat_cumulative)
+	if(reset)
 		ve->num_rrset_bogus = 0;
 	lock_basic_unlock(&ve->bogus_lock);
 	return r;
@@ -211,7 +223,7 @@ get_queries_ratelimit(struct worker* worker, int reset)
 	ie = (struct iter_env*)worker->env.modinfo[m];
 	lock_basic_lock(&ie->queries_ratelimit_lock);
 	r = ie->num_queries_ratelimited;
-	if(reset && !worker->env.cfg->stat_cumulative)
+	if(reset)
 		ie->num_queries_ratelimited = 0;
 	lock_basic_unlock(&ie->queries_ratelimit_lock);
 	return r;
@@ -228,7 +240,7 @@ get_dnscrypt_cache_miss(struct worker* worker, int reset)
 
 	lock_basic_lock(&de->shared_secrets_cache_lock);
 	r = de->num_query_dnscrypt_secret_missed_cache;
-	if(reset && !worker->env.cfg->stat_cumulative)
+	if(reset)
 		de->num_query_dnscrypt_secret_missed_cache = 0;
 	lock_basic_unlock(&de->shared_secrets_cache_lock);
 	return r;
@@ -243,15 +255,23 @@ get_dnscrypt_replay(struct worker* worker, int reset)
 
 	lock_basic_lock(&de->nonces_cache_lock);
 	r = de->num_query_dnscrypt_replay;
-	if(reset && !worker->env.cfg->stat_cumulative)
+	if(reset)
 		de->num_query_dnscrypt_replay = 0;
 	lock_basic_unlock(&de->nonces_cache_lock);
 	return r;
 }
 #endif /* USE_DNSCRYPT */
 
+/** Compile stats from the various sources; if reset is non-zero, clear the
+ ** statistics.
+ **
+ ** N.B. the caller must already have taken stat_cumulative into account
+ **      in computing the reset param, so we don't have to recheck that here
+ */
 void
-server_stats_compile(struct worker* worker, struct ub_stats_info* s, int reset)
+server_stats_compile(struct worker* worker,
+                     struct ub_stats_info* s,
+                     int reset)
 {
 	int i;
 	struct listen_list* lp;
@@ -319,7 +339,7 @@ server_stats_compile(struct worker* worker, struct ub_stats_info* s, int reset)
 	s->svr.num_query_dnscrypt_replay = 0;
 #endif /* USE_DNSCRYPT */
 	if(worker->env.auth_zones) {
-		if(reset && !worker->env.cfg->stat_cumulative) {
+		if(reset) {
 			lock_rw_wrlock(&worker->env.auth_zones->lock);
 		} else {
 			lock_rw_rdlock(&worker->env.auth_zones->lock);
@@ -328,7 +348,7 @@ server_stats_compile(struct worker* worker, struct ub_stats_info* s, int reset)
 			auth_zones->num_query_up;
 		s->svr.num_query_authzone_down = (long long)worker->env.
 			auth_zones->num_query_down;
-		if(reset && !worker->env.cfg->stat_cumulative) {
+		if(reset) {
 			worker->env.auth_zones->num_query_up = 0;
 			worker->env.auth_zones->num_query_down = 0;
 		}
@@ -343,14 +363,8 @@ server_stats_compile(struct worker* worker, struct ub_stats_info* s, int reset)
 
 	/* Set neg cache usage numbers */
 	set_neg_cache_stats(worker, &s->svr, reset);
-#ifdef CLIENT_SUBNET
 	/* EDNS Subnet usage numbers */
 	set_subnet_stats(worker, &s->svr, reset);
-#else
-	s->svr.num_query_subnet = 0;
-	s->svr.num_query_subnet_cache = 0;
-#endif
-
 	/* get tcp accept usage */
 	s->svr.tcp_accept_usage = 0;
 	for(lp = worker->front->cps; lp; lp = lp->next) {
@@ -358,44 +372,130 @@ server_stats_compile(struct worker* worker, struct ub_stats_info* s, int reset)
 			s->svr.tcp_accept_usage += (long long)lp->com->cur_tcp_count;
 	}
 
-	if(reset && !worker->env.cfg->stat_cumulative) {
+	if(reset) {
 		worker_stats_clear(worker);
 	}
 }
 
-void server_stats_obtain(struct worker* worker, struct worker* who,
-	struct ub_stats_info* s, int reset)
+static inline void
+view_stats_add(struct view_stats* lhs, struct view_stats* rhs)
 {
-	uint8_t *reply = NULL;
-	uint32_t len = 0;
-	if(worker == who) {
-		/* just fill it in */
-		server_stats_compile(worker, s, reset);
-		return;
-	}
-	/* communicate over tube */
-	verbose(VERB_ALGO, "write stats cmd");
-	if(reset)
-		worker_send_cmd(who, worker_cmd_stats);
-	else 	worker_send_cmd(who, worker_cmd_stats_noreset);
-	verbose(VERB_ALGO, "wait for stats reply");
-	if(!tube_read_msg(worker->cmd, &reply, &len, 0))
-		fatal_exit("failed to read stats over cmd channel");
-	if(len != (uint32_t)sizeof(*s))
-		fatal_exit("stats on cmd channel wrong length %d %d",
-			(int)len, (int)sizeof(*s));
-	memcpy(s, reply, (size_t)len);
-	free(reply);
+	lhs->num_queries                += rhs->num_queries;
+	lhs->num_queries_ip_ratelimited += rhs->num_queries_ip_ratelimited;
+	lhs->num_queries_missed_cache   += rhs->num_queries_missed_cache;
+	lhs->num_queries_prefetch       += rhs->num_queries_prefetch;
+	lhs->ans_expired                += rhs->ans_expired;
 }
 
-void server_stats_reply(struct worker* worker, int reset)
+void
+server_stats_obtain(struct worker* worker,
+                    struct worker* who,
+                    struct ub_stats_info* s,
+                    struct view_stats* vstats,
+                    int reset)
+{
+	if (worker == who) {
+		/* just fill it in */
+		server_stats_compile(worker, s, reset);
+
+		unsigned int t = worker->thread_num;
+		struct view_node* vn;
+
+		// Add the stats for each view into the specified stats array
+		// how many we'll send and in which order
+
+		RBTREE_FOR(vn, struct view_node *, &worker->daemon->views->vtree) {
+			struct view_stats* vs = vn->vinfo.view_stats + t;
+
+			view_stats_add(vstats++, vs);
+
+			if (reset) {
+				memset(vs, 0, sizeof(*vs));
+			}
+		}
+
+		return;
+	}
+
+	uint8_t *reply = NULL;
+	uint32_t len = 0;
+
+	/* communicate over tube */
+	verbose(VERB_ALGO, "write stats cmd");
+	worker_send_cmd(who, reset ? worker_cmd_stats : worker_cmd_stats_noreset);
+	verbose(VERB_ALGO, "wait for stats reply");
+
+	if (!tube_read_msg(worker->cmd, &reply, &len, 0)) {
+		fatal_exit("failed to read stats over cmd channel");
+	}
+	if (len != (uint32_t)sizeof(*s)) {
+		fatal_exit("stats on cmd channel wrong length %d %d",
+		           (int) len,
+		           (int) sizeof(*s));
+	}
+
+	memcpy(s, reply, (size_t)len);
+	free(reply);
+
+	// Read the view responses, which we'll add into the specified
+	// view array
+
+	struct view_node* vn;
+
+	// Add the stats for each view into the specified stats array
+	// how many we'll send and in which order
+
+	RBTREE_FOR(vn, struct view_node *, &worker->daemon->views->vtree) {
+		if (!tube_read_msg(worker->cmd, &reply, &len, 0)) {
+			fatal_exit("failed to read stats over cmd channel");
+		}
+		if (len != (uint32_t)sizeof(struct view_stats)) {
+			fatal_exit("view stats on cmd channel wrong length %d %d",
+			           (int) len,
+			           (int) sizeof(struct view_stats));
+		}
+
+		view_stats_add(vstats++, (struct view_stats *) reply);
+		free(reply);
+	}
+}
+
+/** Reply with this servers stats and for each view */
+void
+server_stats_reply(struct worker* worker, int reset)
 {
 	struct ub_stats_info s;
+
 	server_stats_compile(worker, &s, reset);
 	verbose(VERB_ALGO, "write stats replymsg");
+
 	if(!tube_write_msg(worker->daemon->workers[0]->cmd, 
-		(uint8_t*)&s, sizeof(s), 0))
+		               (uint8_t*) &s,
+	                   sizeof(s),
+	                   0)) {
 		fatal_exit("could not write stat values over cmd channel");
+	}
+
+	unsigned int t = worker->thread_num;
+	struct view_node* vn;
+
+	// Now return the views stats for this worker. The receiver knows
+	// how many we'll send and in which order
+
+	RBTREE_FOR(vn, struct view_node *, &worker->daemon->views->vtree) {
+		struct view_stats* vs = vn->vinfo.view_stats + t;
+
+		if (!tube_write_msg(worker->daemon->workers[0]->cmd,
+		                    (uint8_t *) vs,
+		                    sizeof(*vs),
+		                    0)) {
+			fatal_exit("could not write %s stat values over cmd channel",
+			           vn->vinfo.name);
+		}
+		if (reset) {
+			memset(vs, 0, sizeof(*vs));
+		}
+	}
 }
 
 void server_stats_add(struct ub_stats_info* total, struct ub_stats_info* a)

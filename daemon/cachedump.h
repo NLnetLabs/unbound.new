@@ -72,6 +72,7 @@
 #ifndef DAEMON_DUMPCACHE_H
 #define DAEMON_DUMPCACHE_H
 struct worker;
+struct view;
 #include "daemon/remote.h"
 
 /**
@@ -81,7 +82,7 @@ struct worker;
  * 	ptrs to the caches.
  * @return false on ssl print error.
  */
-int dump_cache(RES* ssl, struct worker* worker);
+int dump_cache(RES* ssl, struct worker* worker, struct view* v);
 
 /**
  * Load cache(s) from text 
@@ -102,7 +103,7 @@ int load_cache(RES* ssl, struct worker* worker);
  * @param nmlabs: labels in name.
  * @return false on ssl error.
  */
-int print_deleg_lookup(RES* ssl, struct worker* worker, uint8_t* nm,
+int print_deleg_lookup(RES* ssl, struct worker* worker, struct view* v, uint8_t* nm,
 	size_t nmlen, int nmlabs);
 
 #endif /* DAEMON_DUMPCACHE_H */
