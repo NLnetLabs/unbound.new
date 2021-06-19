@@ -134,7 +134,7 @@ response_type_from_server(int rdset,
 	
 	/* Other response codes mean (so far) to throw the response away as
 	 * meaningless and move on to the next nameserver. */
-	if(FLAGS_GET_RCODE(msg->rep->flags) != LDNS_RCODE_NOERROR)
+	if(FLAGS_GET_RCODE(msg->rep->flags) != LDNS_RCODE_NOERROR && FLAGS_GET_RCODE(msg->rep->flags) != LDNS_RCODE_NOTIMPL)
 		return RESPONSE_TYPE_THROWAWAY;
 
 	/* Note: TC bit has already been handled */
