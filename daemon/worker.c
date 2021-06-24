@@ -1290,6 +1290,8 @@ worker_handle_request(struct comm_point* c, void* arg, int error,
 				edns.udp_size = EDNS_ADVERTISED_SIZE;
 				edns.bits &= EDNS_DO;
 				edns.opt_list = NULL;
+				EDNS_OPT_APPEND_EDE(&edns, worker->scratchpad,
+					LDNS_EDNS_EDE, "query with bad edns keepalive.");
 				verbose(VERB_ALGO, "query with bad edns keepalive.");
 				log_addr(VERB_CLIENT,"from",&repinfo->addr, repinfo->addrlen);
 				error_encode(c->buffer, LDNS_RCODE_FORMERR, &qinfo,

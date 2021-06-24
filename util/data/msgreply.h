@@ -516,6 +516,24 @@ int edns_opt_append(struct edns_data* edns, struct regional* region,
 	uint16_t code, size_t len, uint8_t* data);
 
 /**
+ * Append edns EDE option to edns options list
+ * @param EDNS: the edns data structure to append the edns option to.
+ * @param REGION: region to allocate the new edns option.
+ * @param CODE: the EDE code.
+ * @param TXT: Additional text for the option
+ */
+#define EDNS_OPT_APPEND_EDE(EDNS, REGION, CODE, TXT) 			\
+	do {								\
+		struct {						\
+			uint16_t code;					\
+			char text[sizeof(TXT) - 1];			\
+		} ede = { htons(CODE), TXT };				\
+		edns_opt_append((EDNS), (REGION), LDNS_EDNS_EDE, 	\
+			sizeof(uint16_t) + sizeof(TXT) - 1,		\
+			(void *)&ede);					\
+	} while(0);
+
+/**
  * Append edns option to edns option list
  * @param list: the edns option list to append the edns option to.
  * @param code: the edns option's code.

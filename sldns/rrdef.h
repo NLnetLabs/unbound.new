@@ -428,9 +428,18 @@ enum sldns_enum_edns_option
 	LDNS_EDNS_CLIENT_SUBNET = 8, /* RFC7871 */
 	LDNS_EDNS_KEEPALIVE = 11, /* draft-ietf-dnsop-edns-tcp-keepalive*/
 	LDNS_EDNS_PADDING = 12, /* RFC7830 */
+	LDNS_EDNS_EDE = 15, /* RFC8914 */
 	LDNS_EDNS_CLIENT_TAG = 16 /* draft-bellis-dnsop-edns-tags-01 */
 };
 typedef enum sldns_enum_edns_option sldns_edns_option;
+
+enum sldns_enum_ede_code
+{
+	LDNS_EDE_OTHER = 0,
+	LDNS_EDE_UNSUPPORTED_DNSKEY_ALG = 1,
+	LDNS_EDE_UNSUPPORTED_DS_DIGEST = 2
+};
+typedef enum sldns_enum_ede_code sldns_ede_code;
 
 #define LDNS_EDNS_MASK_DO_BIT 0x8000
 
