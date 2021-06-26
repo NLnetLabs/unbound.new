@@ -63,8 +63,8 @@ ProtectHome=true
 ProtectControlGroups=true
 ProtectKernelModules=true
 ProtectSystem=strict
-RuntimeDirectory=unbound
-ConfigurationDirectory=unbound
+RuntimeDirectory=@UNBOUND_RUN_DIR@
+ConfigurationDirectory=@UNBOUND_SYSCONF_DIR@
 StateDirectory=unbound
 RestrictAddressFamilies=AF_INET AF_INET6 AF_NETLINK AF_UNIX
 RestrictRealtime=true
@@ -73,7 +73,7 @@ SystemCallFilter=~@clock @cpu-emulation @debug @keyring @module mount @obsolete 
 RestrictNamespaces=yes
 LockPersonality=yes
 RestrictSUIDSGID=yes
-ReadWritePaths=@UNBOUND_RUN_DIR@ @UNBOUND_CHROOT_DIR@
+ReadWritePaths=@UNBOUND_CHROOT_DIR@ @UNBOUND_ROOTKEY_FILE@
 
 # Below rules are needed when chroot is enabled (usually it's enabled by default).
 # If chroot is disabled like chroot: "" then they may be safely removed.
