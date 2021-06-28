@@ -139,6 +139,9 @@ struct iter_env {
 	lock_basic_type queries_ratelimit_lock;
 	/** number of queries that have been ratelimited */
 	size_t num_queries_ratelimited;
+
+	/** max number of query restarts to limit length of CNAME chain */
+	size_t max_query_restarts;
 };
 
 /**

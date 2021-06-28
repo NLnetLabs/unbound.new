@@ -1291,7 +1291,7 @@ processInitRequest(struct module_qstate* qstate, struct iter_qstate* iq,
 
 	/* We enforce a maximum number of query restarts. This is primarily a
 	 * cheap way to prevent CNAME loops. */
-	if(iq->query_restart_count > MAX_RESTART_COUNT) {
+	if(iq->query_restart_count > ie->max_query_restarts) {
 		verbose(VERB_QUERY, "request has exceeded the maximum number"
 			" of query restarts with %d", iq->query_restart_count);
 		errinf(qstate, "request has exceeded the maximum number "

@@ -1715,6 +1715,11 @@ option can be used multiple times. The most specific match will be used.
 EDNS0 option code for the \fIedns\-client\-string\fR option, from 0 to 65535.
 A value from the `Reserved for Local/Experimental` range (65001-65534) should
 be used.  Default is 65001.
+.TP 5
+.B max\-query\-restarts: \fI<number>
+Set the maximum number of times a query is allowed to restart upon encountering
+a CNAME record. If a query encounters more than the specified number of CNAME
+records before resolving, unbound will reply with SERVFAIL. Default is 8.
 .SS "Remote Control Options"
 In the
 .B remote\-control:

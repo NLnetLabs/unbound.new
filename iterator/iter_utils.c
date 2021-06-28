@@ -176,6 +176,9 @@ iter_apply_cfg(struct iter_env* iter_env, struct config_file* cfg)
 	}
 	iter_env->supports_ipv6 = cfg->do_ip6;
 	iter_env->supports_ipv4 = cfg->do_ip4;
+
+	iter_env->max_query_restarts = cfg->max_query_restarts;
+
 	return 1;
 }
 

@@ -623,6 +623,9 @@ struct config_file {
 	/** block size with which to pad encrypted queries (default: 128) */
 	size_t pad_queries_block_size;
 
+	/** max number of query restarts. Determines max number of CNAME chain (default: 8) */
+	size_t max_query_restarts;
+
 	/** IPsec module */
 #ifdef USE_IPSECMOD
 	/** false to bypass the IPsec module */

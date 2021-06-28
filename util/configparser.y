@@ -165,6 +165,7 @@ extern struct config_parser_state* cfg_parser;
 %token VAR_DNSCRYPT_NONCE_CACHE_SLABS
 %token VAR_PAD_RESPONSES VAR_PAD_RESPONSES_BLOCK_SIZE
 %token VAR_PAD_QUERIES VAR_PAD_QUERIES_BLOCK_SIZE
+%token VAR_MAX_QUERY_RESTARTS
 %token VAR_IPSECMOD_ENABLED VAR_IPSECMOD_HOOK VAR_IPSECMOD_IGNORE_BOGUS
 %token VAR_IPSECMOD_MAX_TTL VAR_IPSECMOD_WHITELIST VAR_IPSECMOD_STRICT
 %token VAR_CACHEDB VAR_CACHEDB_BACKEND VAR_CACHEDB_SECRETSEED
@@ -282,6 +283,7 @@ content_server: server_num_threads | server_verbosity | server_port |
 	server_qname_minimisation_strict |
 	server_pad_responses | server_pad_responses_block_size |
 	server_pad_queries | server_pad_queries_block_size |
+	server_max_query_restarts |
 	server_serve_expired |
 	server_serve_expired_ttl | server_serve_expired_ttl_reset |
 	server_serve_expired_reply_ttl | server_serve_expired_client_timeout |
@@ -2549,6 +2551,15 @@ server_pad_queries_block_size: VAR_PAD_QUERIES_BLOCK_SIZE STRING_ARG
 		if(atoi($2) == 0)
 			yyerror("number expected");
 		else cfg_parser->cfg->pad_queries_block_size = atoi($2);
+		free($2);
+	}
+	;
+server_max_query_restarts: VAR_MAX_QUERY_RESTARTS STRING_ARG
+	{
+		OUTYY(("P(server_max_query_restarts:%s)\n", $2));
+		if(atoi($2) == 0)
+			yyerror("number expected");
+		else cfg_parser->cfg->max_query_restarts = atoi($2);
 		free($2);
 	}
 	;

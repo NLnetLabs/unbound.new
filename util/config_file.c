@@ -348,6 +348,7 @@ config_create(void)
 	cfg->pad_responses_block_size = 468; /* from RFC8467 */
 	cfg->pad_queries = 1;
 	cfg->pad_queries_block_size = 128; /* from RFC8467 */
+	cfg->max_query_restarts = MAX_RESTART_COUNT;
 #ifdef USE_IPSECMOD
 	cfg->ipsecmod_enabled = 1;
 	cfg->ipsecmod_ignore_bogus = 0;
@@ -756,6 +757,7 @@ int config_set_option(struct config_file* cfg, const char* opt,
 	else S_SIZET_NONZERO("pad-responses-block-size:", pad_responses_block_size)
 	else S_YNO("pad-queries:", pad_queries)
 	else S_SIZET_NONZERO("pad-queries-block-size:", pad_queries_block_size)
+	else S_SIZET_NONZERO("max-query-restarts:", max_query_restarts)
 #ifdef USE_IPSECMOD
 	else S_YNO("ipsecmod-enabled:", ipsecmod_enabled)
 	else S_YNO("ipsecmod-ignore-bogus:", ipsecmod_ignore_bogus)
@@ -1209,6 +1211,7 @@ config_get_option(struct config_file* cfg, const char* opt,
 	else O_YNO(opt, "pad-queries", pad_queries)
 	else O_DEC(opt, "pad-queries-block-size", pad_queries_block_size)
 	else O_LS2(opt, "edns-client-strings", edns_client_strings)
+	else O_DEC(opt, "max-query-restarts", max_query_restarts)
 #ifdef USE_IPSECMOD
 	else O_YNO(opt, "ipsecmod-enabled", ipsecmod_enabled)
 	else O_YNO(opt, "ipsecmod-ignore-bogus", ipsecmod_ignore_bogus)
