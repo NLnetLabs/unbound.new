@@ -830,7 +830,7 @@ ACX_WITH_SSL
 ACX_LIB_SSL
 SSLLIB="-lssl"
 
-PC_CRYPTO_DEPENDENCY="libcrypto libssl"
+PC_CRYPTO_DEPENDENCY=""
 AC_SUBST(PC_CRYPTO_DEPENDENCY)
 
 # check if -lcrypt32 is needed because CAPIENG needs that. (on windows)
