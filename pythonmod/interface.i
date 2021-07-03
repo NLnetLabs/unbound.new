@@ -1680,6 +1680,82 @@ int edns_opt_list_append(struct edns_option** list, uint16_t code, size_t len,
         if (ret) Py_INCREF(py_cb);
         return ret;
     }
+
+    int python_inplace_cb_query_response(struct module_qstate* qstate,
+        struct dns_msg* response, int id, void* python_callback)
+    {
+        int res = 0;
+        PyObject *func = python_callback;
+
+        PyGILState_STATE gstate = PyGILState_Ensure();
+
+        PyObject *py_qstate = SWIG_NewPointerObj((void*) qstate, SWIGTYPE_p_module_qstate, 0);
+        PyObject *py_response = SWIG_NewPointerObj((void*) response, SWIGTYPE_p_dns_msg, 0);
+
+        PyObject *py_args = Py_BuildValue("(OO)", py_qstate, py_response);
+        PyObject *py_kwargs = Py_BuildValue("{}");
+        PyObject *result = PyObject_Call(func, py_args, py_kwargs);
+        if (result) {
+            res = PyInt_AsLong(result);
+        }
+
+        Py_XDECREF(py_qstate);
+        Py_XDECREF(py_response);
+
+        Py_XDECREF(py_args);
+        Py_XDECREF(py_kwargs);
+        Py_XDECREF(result);
+
+        PyGILState_Release(gstate);
+
+        return res;
+    }
+
+    static int register_inplace_cb_query_response(PyObject* py_cb,
+        struct module_env* env, int id)
+    {
+        int ret = inplace_cb_register(python_inplace_cb_query_response,
+            inplace_cb_query_response, (void*) py_cb, env, id);
+        if (ret) Py_INCREF(py_cb);
+        return ret;
+    }
+
+    int python_inplace_cb_edns_back_parsed_call(struct module_qstate* qstate,
+        int id, void* python_callback)
+    {
+        int res = 0;
+        PyObject *func = python_callback;
+
+        PyGILState_STATE gstate = PyGILState_Ensure();
+
+        PyObject *py_qstate = SWIG_NewPointerObj((void*) qstate, SWIGTYPE_p_module_qstate, 0);
+
+        PyObject *py_args = Py_BuildValue("(O)", py_qstate);
+        PyObject *py_kwargs = Py_BuildValue("{}");
+        PyObject *result = PyObject_Call(func, py_args, py_kwargs);
+        if (result) {
+            res = PyInt_AsLong(result);
+        }
+
+        Py_XDECREF(py_qstate);
+
+        Py_XDECREF(py_args);
+        Py_XDECREF(py_kwargs);
+        Py_XDECREF(result);
+
+        PyGILState_Release(gstate);
+
+        return res;
+    }
+
+    static int register_inplace_cb_edns_back_parsed_call(PyObject* py_cb,
+        struct module_env* env, int id)
+    {
+        int ret = inplace_cb_register(python_inplace_cb_edns_back_parsed_call,
+            inplace_cb_edns_back_parsed, (void*) py_cb, env, id);
+        if (ret) Py_INCREF(py_cb);
+        return ret;
+    }
 %}
 /* C declarations */
 int inplace_cb_register(void* cb, enum inplace_cb_list_type type, void* cbarg,
@@ -1695,4 +1771,8 @@ static int register_inplace_cb_reply_local(PyObject* py_cb,
 static int register_inplace_cb_reply_servfail(PyObject* py_cb,
     struct module_env* env, int id);
 static int register_inplace_cb_query(PyObject *py_cb,
+    struct module_env* env, int id);
+static int register_inplace_cb_query_response(PyObject *py_cb,
+    struct module_env* env, int id);
+static int register_inplace_cb_edns_back_parsed_call(PyObject *py_cb,
     struct module_env* env, int id);
