@@ -232,15 +232,19 @@ ub_ctx_create_event(struct event_base* eb)
 	ctx->created_bg = 0;
 	ctx->dothread = 1; /* the processing is in the same process,
 		makes ub_cancel and ub_ctx_delete do the right thing */
+
+	bool eb_malloced = !eb;
+
 	ctx->event_base = ub_libevent_event_base(eb);
 	if (!ctx->event_base) {
 		ub_ctx_delete(ctx);
 		return NULL;
 	}
-	ctx->event_base_malloced = 1;
+
+	ctx->event_base_malloced = eb_malloced;
 	return ctx;
 }
-	
+
 /** delete q */
 static void
 delq(rbnode_type* n, void* ATTR_UNUSED(arg))
