@@ -1558,6 +1558,15 @@ local_zone_does_not_cover(struct local_zone* z, struct query_info* qinfo,
 	return (lr == NULL);
 }
 
+static inline int
+local_zone_is_udp_query(struct comm_reply* repinfo) {
+	return repinfo != NULL
+			? (repinfo->c != NULL
+				? repinfo->c->type == comm_udp
+				: 0)
+			: 0;
+}
+
 int
 local_zones_zone_answer(struct local_zone* z, struct module_env* env,
 	struct query_info* qinfo, struct edns_data* edns,
@@ -1580,7 +1589,9 @@ local_zones_zone_answer(struct local_zone* z, struct module_env* env,
 		lz_type == local_zone_redirect ||
 		lz_type == local_zone_inform_redirect ||
 		lz_type == local_zone_always_nxdomain ||
-		lz_type == local_zone_always_nodata) {
+		lz_type == local_zone_always_nodata ||
+		(lz_type == local_zone_truncate
+			&& local_zone_is_udp_query(repinfo))) {
 		/* for static, reply nodata or nxdomain
 		 * for redirect, reply nodata */
 		/* no additional section processing,
@@ -1590,9 +1601,11 @@ local_zones_zone_answer(struct local_zone* z, struct module_env* env,
 		 */
 		int rcode = (ld || lz_type == local_zone_redirect ||
 			lz_type == local_zone_inform_redirect ||
-			lz_type == local_zone_always_nodata)?
+			lz_type == local_zone_always_nodata ||
+			lz_type == local_zone_truncate)?
 			LDNS_RCODE_NOERROR:LDNS_RCODE_NXDOMAIN;
-		if(z->soa && z->soa_negative)
+		rcode = (lz_type == local_zone_truncate ? (rcode|BIT_TC) : rcode);
+		if(z != NULL && z->soa && z->soa_negative)
 			return local_encode(qinfo, env, edns, repinfo, buf, temp,
 				z->soa_negative, 0, rcode);
 		local_error_encode(qinfo, env, edns, repinfo, buf, temp, rcode,
@@ -1649,7 +1662,7 @@ local_zones_zone_answer(struct local_zone* z, struct module_env* env,
 	 * does not, then we should make this noerror/nodata */
 	if(ld && ld->rrsets) {
 		int rcode = LDNS_RCODE_NOERROR;
-		if(z->soa && z->soa_negative)
+		if(z != NULL && z->soa && z->soa_negative)
 			return local_encode(qinfo, env, edns, repinfo, buf, temp,
 				z->soa_negative, 0, rcode);
 		local_error_encode(qinfo, env, edns, repinfo, buf, temp, rcode,
@@ -1848,6 +1861,7 @@ const char* local_zone_type2str(enum localzone_type t)
 		case local_zone_always_deny: return "always_deny";
 		case local_zone_always_null: return "always_null";
 		case local_zone_noview: return "noview";
+		case local_zone_truncate: return "truncate";
 		case local_zone_invalid: return "invalid";
 	}
 	return "badtyped"; 
@@ -1887,6 +1901,8 @@ int local_zone_str2type(const char* type, enum localzone_type* t)
 		*t = local_zone_always_null;
 	else if(strcmp(type, "noview") == 0)
 		*t = local_zone_noview;
+	else if(strcmp(type, "truncate") == 0)
+		*t = local_zone_truncate;
 	else if(strcmp(type, "nodefault") == 0)
 		*t = local_zone_nodefault;
 	else return 0;

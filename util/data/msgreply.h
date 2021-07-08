@@ -382,6 +382,21 @@ struct reply_info* reply_info_copy(struct reply_info* rep,
 int reply_info_alloc_rrset_keys(struct reply_info* rep,
 	struct alloc_cache* alloc, struct regional* region);
 
+/*
+ * Create a new reply_info based on 'rep'.  The new info is based on
+ * the passed 'rep', but ignores any rrsets except for the first 'an_numrrsets'
+ * RRsets in the answer section.  These answer rrsets are copied to the
+ * new info, up to 'copy_rrsets' rrsets (which must not be larger than
+ * 'an_numrrsets').  If an_numrrsets > copy_rrsets, the remaining rrsets array
+ * entries will be kept empty so the caller can fill them later.  When rrsets
+ * are copied, they are shallow copied.  The caller must ensure that the
+ * copied rrsets are valid throughout its lifetime and must provide appropriate
+ * mutex if it can be shared by multiple threads.
+ */
+struct reply_info *
+make_new_reply_info(const struct reply_info* rep, struct regional* region,
+	size_t an_numrrsets, size_t copy_rrsets);
+
 /**
  * Copy a parsed rrset into given key, decompressing and allocating rdata.
  * @param pkt: packet for decompression

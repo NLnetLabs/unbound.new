@@ -685,8 +685,8 @@ specific cache, after getting processed by the edns client subnet module.
 .TP
 .I num.rpz.action.<rpz_action>
 Number of queries answered using configured RPZ policy, per RPZ action type.
-Possible actions are: nxdomain, nodata, passthru, drop, local_data, disabled,
-and cname_override.
+Possible actions are: nxdomain, nodata, passthru, drop, tcp\-only, local\-data,
+disabled, and cname\-override.
 .SH "FILES"
 .TP
 .I @ub_conf_file@

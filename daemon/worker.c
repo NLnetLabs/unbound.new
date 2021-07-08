@@ -1355,7 +1355,7 @@ worker_handle_request(struct comm_point* c, void* arg, int error,
 		goto send_reply;
 	}
 	if(worker->env.auth_zones &&
-		rpz_apply_qname_trigger(worker->env.auth_zones,
+		rpz_callback_from_worker_request(worker->env.auth_zones,
 		&worker->env, &qinfo, &edns, c->buffer, worker->scratchpad,
 		repinfo, acladdr->taglist, acladdr->taglen, &worker->stats)) {
 		regional_free_all(worker->scratchpad);

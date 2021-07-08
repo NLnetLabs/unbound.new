@@ -1143,10 +1143,11 @@ remote-control:
 # 	dnstap-log-forwarder-response-messages: no
 
 # Response Policy Zones
-# RPZ policies. Applied in order of configuration. QNAME and Response IP
-# Address trigger are the only supported triggers. Supported actions are:
-# NXDOMAIN, NODATA, PASSTHRU, DROP and Local Data. Policies can be loaded from
-# file, using zone transfer, or using HTTP. The respip module needs to be added
+# RPZ policies. Applied in order of configuration. QNAME, Response IP
+# Address, nsdname, nsip and clientip triggers are supported. Supported
+# actions are: NXDOMAIN, NODATA, PASSTHRU, DROP, Local Data, tcp-only
+# and drop.  Policies can be loaded from a file, or using zone
+# transfer, or using HTTP. The respip module needs to be added
 # to the module-config, e.g.: module-config: "respip validator iterator".
 # rpz:
 #     name: "rpz.example.com"

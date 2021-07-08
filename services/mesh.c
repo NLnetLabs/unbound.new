@@ -1183,6 +1183,22 @@ mesh_do_callback(struct mesh_state* m, int rcode, struct reply_info* rep,
 	m->s.env->mesh->num_reply_addrs--;
 }
 
+static inline int
+mesh_is_rpz_respip_tcponly_action(struct mesh_state const* m)
+{
+	struct respip_action_info const* respip_info = m->s.respip_action_info;
+	return respip_info == NULL
+			? 0
+			: (respip_info->rpz_used
+			&& !respip_info->rpz_disabled
+			&& respip_info->action == respip_truncate);
+}
+
+static inline int
+mesh_is_udp(struct mesh_reply const* r) {
+	return r->query_reply.c->type == comm_udp;
+}
+
 /**
  * Send reply to mesh reply entry
  * @param m: mesh state to send it for.
@@ -1210,6 +1226,11 @@ mesh_send_reply(struct mesh_state* m, int rcode, struct reply_info* rep,
 	 * null stops the mesh state remove and thus
 	 * reply_list modification and accounting */
 	struct mesh_reply* rlist = m->reply_list;
+
+	/* rpz: apply actions */
+	rcode = mesh_is_udp(r) && mesh_is_rpz_respip_tcponly_action(m)
+			? (rcode|BIT_TC) : rcode;
+
 	/* examine security status */
 	if(m->s.env->need_to_validate && (!(r->qflags&BIT_CD) ||
 		m->s.env->cfg->ignore_cd) && rep && 

@@ -2495,10 +2495,49 @@ with a different name. RPZ clauses are applied in order of configuration. The
 \fBrespip\fR module needs to be added to the \fBmodule-config\fR, e.g.:
 \fBmodule-config: "respip validator iterator"\fR.
 .P
-Only the QNAME and Response IP Address triggers are supported. The supported RPZ
-actions are: NXDOMAIN, NODATA, PASSTHRU, DROP and Local Data. RPZ QNAME triggers
-are applied after
-\fBlocal-zones\fR and before \fBauth-zones\fR.
+QNAME, Response IP Address, nsdname, nsip and clientip triggers are supported.
+Supported actions are: NXDOMAIN, NODATA, PASSTHRU, DROP, Local Data, tcp\-only
+and drop.  RPZ QNAME triggers are applied after \fBlocal\-zones\fR and
+before \fBauth\-zones\fR.
+.P
+The rpz zone is formatted with a SOA start record as usual.  The items in
+the zone are entries, that specify what to act on (the trigger) and what to
+do (the action).  The trigger to act on is recorded in the name, the action
+to do is recorded as the resource record.  The names all end in the zone
+name, so you could type the trigger names without a trailing dot in the
+zonefile.
+.P
+An example RPZ record, that answers example.com with NXDOMAIN
+.nf
+	example.com CNAME .
+.fi
+.P
+The triggers are encoded in the name on the left
+.nf
+	name                          query name
+	netblock.rpz-client-ip        client IP address
+	netblock.rpz-ip               response IP address in the answer
+	name.rpz-nsdname              nameserver name
+	netblock.rpz-nsip             nameserver IP address
+.fi
+The netblock is written as <netblocklen>.<ip address in reverse>.
+For IPv6 use 'zz' for '::'.  Specify individual addresses with scope length
+of 32 or 128.  For example, 24.10.100.51.198.rpz-ip is 198.51.100.10/24 and
+32.10.zz.db8.2001.rpz-ip is 2001:db8:0:0:0:0:0:10/32.
+.P
+The actions are specified with the record on the right
+.nf
+	CNAME .                      nxdomain reply
+	CNAME *.                     nodata reply
+	CNAME rpz-passthru.          do nothing, allow to continue
+	CNAME rpz-drop.              the query is dropped
+	CNAME rpz-tcp-only.          answer over TCP
+	A 192.0.2.1                  answer with this IP address
+.fi
+Other records like AAAA, TXT and other CNAMEs (not rpz-..) can also be used to
+answer queries with that content.
+.P
+The RPZ zones can be configured in the config file with these settings in the \fBrpz:\fR block.
 .TP
 .B name: \fI<zone name>
 Name of the authority zone.

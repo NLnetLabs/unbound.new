@@ -634,6 +634,9 @@ int auth_zones_startprobesequence(struct auth_zones* az,
 /** read auth zone from zonefile. caller must lock zone. false on failure */
 int auth_zone_read_zonefile(struct auth_zone* z, struct config_file* cfg);
 
+/** find the apex SOA RRset, if it exists. NULL if no SOA RRset. */
+struct auth_rrset* auth_zone_get_soa_rrset(struct auth_zone* z);
+
 /** find serial number of zone or false if none (no SOA record) */
 int auth_zone_get_serial(struct auth_zone* z, uint32_t* serial);
 
