@@ -136,8 +136,19 @@ struct ub_result {
 	 */
 	char** data;
 
+	/**
+	 * a list of network order DNS rdata items, terminated with a
+	 * NULL pointer, so that authority_data[0] is the first result entry,
+	 * data[1] the second, and the last entry is NULL.
+	 * If there was no data, authority_data[0] is NULL.
+	 */
+	char** authority_data;
+
 	/** the length in bytes of the data items, len[i] for data[i] */
 	int* len;
+
+	/** the length in bytes of the authority_data items, authority_len[i] for autority_data[i] */
+	int* authority_len;
 
 	/** 
 	 * canonical name for the result (the final cname). 
@@ -215,6 +226,12 @@ struct ub_result {
 	 * you also cannot trust this value.
 	 */
 	int ttl;
+
+	/**
+	 * TTL for the authority results, in seconds.  If the security is bogus, then
+	 * you also cannot trust this value.
+	 */
+	int authority_ttl;
 };
 
 /**
