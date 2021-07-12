@@ -2044,7 +2044,7 @@ pending_udp_query(struct serviced_query* sq, struct sldns_buffer* packet,
 
 	if(sq->outnet->unused_fds == NULL) {
 		/* no unused fd, cannot create a new port (randomly) */
-		verbose(VERB_ALGO, "no fds available, udp query waiting");
+		verbose(NO_VERBOSE, "no fds available, udp query waiting");
 		pend->timeout = timeout;
 		pend->pkt_len = sldns_buffer_limit(packet);
 		pend->pkt = (uint8_t*)memdup(sldns_buffer_begin(packet),
